@@ -1,0 +1,6 @@
+{
+  "name": "Betting Predictions and Tips",
+  "description": "Football match predictions, expert betting tips, live scores, and statistics across major leagues including Premier League, Champions League, and CAN 2025.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

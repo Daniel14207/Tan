@@ -1,0 +1,1547 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { useState, useMemo } from 'react';
+import { Match, League, NotificationItem, UserAccount, PaymentRequest, LiveSignal, ChatMessage } from './types';
+import { MATCHES_DATABASE, LEAGUES_LIST, NOTIFICATIONS_DATABASE } from './data/matchDatabase';
+import Navbar from './components/Navbar';
+import DateSelector from './components/DateSelector';
+import MatchCard from './components/MatchCard';
+import VipModal from './components/VipModal';
+import NotificationPanel from './components/NotificationPanel';
+import SupportChat from './components/SupportChat';
+import MoreSheet from './components/MoreSheet';
+import AuthScreen from './components/AuthScreen';
+import AdminPanel from './components/AdminPanel';
+
+import {
+  Trophy,
+  Activity,
+  Award,
+  Calendar,
+  Sparkles,
+  Zap,
+  TrendingUp,
+  Search,
+  CheckCircle,
+  HelpCircle,
+  User,
+  ShieldAlert,
+  Crown,
+  ChevronRight,
+  Calculator,
+  Plus,
+  Minus,
+  Trash2,
+  Megaphone,
+} from 'lucide-react';
+
+export default function App() {
+  // --- USER ACCOUNTS AND AUTH STATE ---
+  const [users, setUsers] = useState<UserAccount[]>(() => {
+    const saved = localStorage.getItem('sourspark_users');
+    if (saved) return JSON.parse(saved);
+    const initialUsers: UserAccount[] = [
+      {
+        userId: 'USR-100001',
+        username: 'VIP User',
+        phoneNumber: '0341234567',
+        dob: '2000-01-01',
+        passwordHash: '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8', // "password"
+        isVip: true,
+        isSuspended: false,
+        createdAt: '28/06/2026'
+      },
+      {
+        userId: 'USR-100002',
+        username: 'Free User',
+        phoneNumber: '0321234567',
+        dob: '2005-05-15',
+        passwordHash: '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8', // "password"
+        isVip: false,
+        isSuspended: false,
+        createdAt: '29/06/2026'
+      }
+    ];
+    localStorage.setItem('sourspark_users', JSON.stringify(initialUsers));
+    return initialUsers;
+  });
+
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
+    const saved = localStorage.getItem('sourspark_current_user');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      const freshUser = JSON.parse(localStorage.getItem('sourspark_users') || '[]').find(
+        (u: any) => u.userId === parsed.userId
+      );
+      if (freshUser) {
+        if (freshUser.isSuspended) {
+          localStorage.removeItem('sourspark_current_user');
+          return null;
+        }
+        return freshUser;
+      }
+      return parsed;
+    }
+    return null;
+  });
+
+  // --- MATCHES AND LEAGUES DYNAMIC DATABASE ---
+  const [matches, setMatches] = useState<Match[]>(() => {
+    const saved = localStorage.getItem('sourspark_matches');
+    if (saved) return JSON.parse(saved);
+    localStorage.setItem('sourspark_matches', JSON.stringify(MATCHES_DATABASE));
+    return MATCHES_DATABASE;
+  });
+
+  const [leagues, setLeagues] = useState<League[]>(() => {
+    const saved = localStorage.getItem('sourspark_leagues');
+    if (saved) return JSON.parse(saved);
+    localStorage.setItem('sourspark_leagues', JSON.stringify(LEAGUES_LIST));
+    return LEAGUES_LIST;
+  });
+
+  // --- PAYMENT REQUESTS ---
+  const [paymentRequests, setPaymentRequests] = useState<PaymentRequest[]>(() => {
+    const saved = localStorage.getItem('sourspark_payment_requests');
+    if (saved) return JSON.parse(saved);
+    return [];
+  });
+
+  // --- LIVE SIGNALS & ANNOUNCEMENTS ---
+  const [liveSignals, setLiveSignals] = useState<LiveSignal[]>(() => {
+    const saved = localStorage.getItem('sourspark_live_signals');
+    if (saved) return JSON.parse(saved);
+    const initialSignals: LiveSignal[] = [
+      {
+        id: 'sig-1',
+        type: 'announcement',
+        title: '🔥 Grand Lancement Sourspark VIP !',
+        content: 'Bénéficiez dès aujourd\'hui d\'un accès premium complet à nos prédictions d\'intelligence artificielle et maximisez vos gains dès ce soir.',
+        timestamp: '10:00',
+        isPremium: false
+      },
+      {
+        id: 'sig-2',
+        type: 'signal',
+        title: '📡 Signal Live Détecté (Forte Probabilité)',
+        content: 'Les modèles de simulation indiquent une forte domination de Manchester City. Valeur de mise en direct intéressante.',
+        matchInfo: 'Manchester City vs Tottenham',
+        prediction: 'Victoire Manchester City (1)',
+        odds: 1.45,
+        timestamp: '20:15',
+        isPremium: true
+      }
+    ];
+    localStorage.setItem('sourspark_live_signals', JSON.stringify(initialSignals));
+    return initialSignals;
+  });
+
+  // --- SUPPORT CHAT MESSAGES ---
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
+    const saved = localStorage.getItem('sourspark_chat_messages');
+    if (saved) return JSON.parse(saved);
+    const initialMsgs: ChatMessage[] = [
+      {
+        id: 'welcome-1',
+        userId: 'system',
+        sender: 'admin',
+        text: 'Bienvenue sur le support de Predictions Sourspark ! Comment pouvons-nous vous aider aujourd\'hui ?',
+        timestamp: '08:00'
+      }
+    ];
+    localStorage.setItem('sourspark_chat_messages', JSON.stringify(initialMsgs));
+    return initialMsgs;
+  });
+
+  // Navigation state
+  // "home" | "free" | "best" | "live" | "vip" | "htft" | "more" | "live-scores" | "live-tips" | "single" | "btts" | "overunder" | "terms" | "privacy" | "profile" | "live-top" | "admin"
+  const [activeView, setActiveView] = useState<string>('home');
+  const [selectedDate, setSelectedDate] = useState<string>('2026-06-30');
+  const [selectedLeagueId, setSelectedLeagueId] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  
+  // Onboarding state
+  const [showOnboarding, setShowOnboarding] = useState<boolean>(() => {
+    return !localStorage.getItem('onboarding_completed');
+  });
+  const [favLeague, setFavLeague] = useState<string>('eng');
+
+  // Bet slip / cart state
+  const [betSlip, setBetSlip] = useState<{ matchId: string; choice: '1' | 'X' | '2'; odds: number }[]>([]);
+  const [stake, setStake] = useState<number>(10);
+  const [isBetSlipOpen, setIsBetSlipOpen] = useState<boolean>(false);
+
+  // VIP Subscription status calculated dynamically from user database
+  const isVipSubscribed = useMemo(() => {
+    if (!currentUser) return false;
+    const userObj = users.find((u) => u.userId === currentUser.userId);
+    return userObj ? userObj.isVip : false;
+  }, [currentUser, users]);
+
+  const [isVipModalOpen, setIsVipModalOpen] = useState<boolean>(false);
+
+  // Support messages mapped dynamically for current user
+  const userSupportMessages = useMemo(() => {
+    if (!currentUser) return [];
+    return chatMessages.filter(
+      (m) => m.userId === currentUser.userId || m.userId === 'system'
+    ).map((m) => ({
+      id: m.id,
+      sender: m.sender === 'admin' ? 'support' as const : 'user' as const,
+      text: m.text,
+      timestamp: m.timestamp
+    }));
+  }, [chatMessages, currentUser]);
+
+  const [isSupportOpen, setIsSupportOpen] = useState<boolean>(false);
+
+  // Notifications state
+  const [notifications, setNotifications] = useState<NotificationItem[]>(NOTIFICATIONS_DATABASE);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState<boolean>(false);
+  const [notificationFilter, setNotificationFilter] = useState<'all' | 'unread'>('all');
+
+  // Free page status sub-filters (Pending, Won, Lost)
+  const [freeSubFilter, setFreeSubFilter] = useState<'Pending' | 'Won' | 'Lost' | 'All'>('All');
+
+  // Computed counters
+  const cartCount = betSlip.length;
+  const unreadNotificationCount = notifications.filter((n) => !n.read).length;
+
+  // Onboarding Complete action
+  const handleCompleteOnboarding = () => {
+    localStorage.setItem('onboarding_completed', 'true');
+    setShowOnboarding(false);
+    if (favLeague !== 'all') {
+      setSelectedLeagueId(favLeague);
+    }
+  };
+
+  // Reset Onboarding action
+  const handleResetOnboarding = () => {
+    localStorage.removeItem('onboarding_completed');
+    setShowOnboarding(true);
+    setActiveView('home');
+    setIsNotificationsOpen(false);
+    setIsSupportOpen(false);
+  };
+
+  // Submit payment helper inside VipModal
+  const handleSubmitPayment = (method: 'orange' | 'airtel' | 'mvola' | 'usdt', reference: string, amount: string) => {
+    if (!currentUser) return;
+    const newRequest: PaymentRequest = {
+      id: `req-${Date.now()}`,
+      userId: currentUser.userId,
+      userPhone: currentUser.phoneNumber,
+      method,
+      reference,
+      amount,
+      status: 'Pending',
+      timestamp: new Date().toLocaleString('fr-FR')
+    };
+
+    const updated = [...paymentRequests, newRequest];
+    setPaymentRequests(updated);
+    localStorage.setItem('sourspark_payment_requests', JSON.stringify(updated));
+  };
+
+  // Select payment method action in VipModal (Chat redirection & manual flow)
+  const handleSelectPaymentMethod = (method: 'orange' | 'airtel' | 'mvola' | 'usdt') => {
+    if (!currentUser) return;
+
+    // 1. Close VIP Modal
+    setIsVipModalOpen(false);
+
+    // 2. Open the support chat
+    setIsSupportOpen(true);
+
+    // 3. Generate prefilled message from the user
+    let methodFriendly = "";
+    if (method === 'orange') methodFriendly = "Orange Money";
+    if (method === 'airtel') methodFriendly = "Airtel Money";
+    if (method === 'mvola') methodFriendly = "MVola";
+    if (method === 'usdt') methodFriendly = "USDT (TRC20)";
+
+    const userMessageText = `Bonjour, je souhaite m'abonner au VIP Premium via ${methodFriendly}. Pouvez-vous m'envoyer les informations de paiement ?`;
+
+    const userMsg: ChatMessage = {
+      id: `msg-user-${Date.now()}`,
+      userId: currentUser.userId,
+      sender: 'user',
+      text: userMessageText,
+      timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+    };
+
+    // 4. Admin automatic response
+    let adminResponseText = "";
+    if (method === 'orange') {
+      adminResponseText = "Bonjour ! Pour payer par Orange Money, veuillez envoyer 30 000 MGA au numéro suivant : 032 45 678 90 (Nom: SOURSPARK VIP). Veuillez envoyer une capture d'écran ou la référence du SMS une fois le paiement effectué.";
+    } else if (method === 'airtel') {
+      adminResponseText = "Bonjour ! Pour payer par Airtel Money, veuillez envoyer 30 000 MGA au numéro suivant : 033 12 345 67 (Nom: SOURSPARK VIP). Veuillez envoyer une capture d'écran ou la référence du SMS une fois le paiement effectué.";
+    } else if (method === 'mvola') {
+      adminResponseText = "Bonjour ! Pour payer par MVola, veuillez envoyer 30 000 MGA au numéro suivant : 034 98 765 43 (Nom: SOURSPARK VIP). Veuillez envoyer une capture d'écran ou la référence du SMS une fois le paiement effectué.";
+    } else {
+      adminResponseText = "Bonjour ! Pour payer par USDT (TRC20), veuillez envoyer 7.5 USDT à l'adresse suivante : TYgq932KJsjSJDHw92iSJs9182sTRC20. Veuillez copier-coller le TxHash de la transaction après envoi.";
+    }
+
+    const adminMsg: ChatMessage = {
+      id: `msg-admin-${Date.now() + 1}`,
+      userId: currentUser.userId,
+      sender: 'admin',
+      text: adminResponseText,
+      timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+    };
+
+    // Update messages database
+    const currentMessages = JSON.parse(localStorage.getItem('sourspark_chat_messages') || '[]');
+    const updatedMessages = [...currentMessages, userMsg, adminMsg];
+    localStorage.setItem('sourspark_chat_messages', JSON.stringify(updatedMessages));
+    setChatMessages(updatedMessages);
+    
+    // Create a pending request
+    const newRequest: PaymentRequest = {
+      id: `req-${Date.now()}`,
+      userId: currentUser.userId,
+      userPhone: currentUser.phoneNumber,
+      method,
+      reference: "En attente via Chat",
+      amount: "30,000 MGA",
+      status: 'Pending',
+      timestamp: new Date().toLocaleString('fr-FR')
+    };
+
+    const updatedReqs = [...paymentRequests, newRequest];
+    setPaymentRequests(updatedReqs);
+    localStorage.setItem('sourspark_payment_requests', JSON.stringify(updatedReqs));
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('sourspark_current_user');
+    setCurrentUser(null);
+    localStorage.removeItem('vip_active');
+    alert('Vous avez été déconnecté avec succès.');
+    setActiveView('home');
+  };
+
+  const handleOpenAdmin = () => {
+    const pin = prompt("Saisir le Code PIN d'Administration Sécurisé :");
+    if (pin === '2026') {
+      setActiveView('admin');
+    } else if (pin !== null) {
+      alert('Code PIN incorrect.');
+    }
+  };
+
+  // Notification actions
+  const handleMarkAsRead = (id: string) => {
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+    );
+  };
+
+  const handleClearNotifications = () => {
+    setNotifications([]);
+  };
+
+  // Bet slip action: click an odd on a match card
+  const handleBetClick = (matchId: string, choice: '1' | 'X' | '2') => {
+    const matchObj = matches.find((m) => m.id === matchId);
+    if (!matchObj) return;
+
+    const oddsVal =
+      choice === '1'
+        ? matchObj.odds.homeWin
+        : choice === 'X'
+        ? matchObj.odds.draw
+        : matchObj.odds.awayWin;
+
+    setBetSlip((prev) => {
+      const existingIdx = prev.findIndex((item) => item.matchId === matchId);
+      if (existingIdx > -1) {
+        // If they click the exact same choice, remove it. Otherwise update choice
+        if (prev[existingIdx].choice === choice) {
+          return prev.filter((item) => item.matchId !== matchId);
+        } else {
+          const updated = [...prev];
+          updated[existingIdx] = { matchId, choice, odds: oddsVal };
+          return updated;
+        }
+      } else {
+        return [...prev, { matchId, choice, odds: oddsVal }];
+      }
+    });
+    setIsBetSlipOpen(true);
+  };
+
+  const removeFromBetSlip = (matchId: string) => {
+    setBetSlip((prev) => prev.filter((item) => item.matchId !== matchId));
+  };
+
+  // Computed potential payout for bet slip
+  const totalOdds = useMemo(() => {
+    if (betSlip.length === 0) return 0;
+    return betSlip.reduce((acc, item) => acc * item.odds, 1);
+  }, [betSlip]);
+
+  const potentialWin = (totalOdds * stake).toFixed(2);
+
+  // Send Support Message & automated intelligent answers
+  const handleSendMessage = (text: string) => {
+    if (!currentUser) return;
+    const newMsg: ChatMessage = {
+      id: `user-msg-${Date.now()}`,
+      userId: currentUser.userId,
+      sender: 'user',
+      text,
+      timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    const updated = [...chatMessages, newMsg];
+    setChatMessages(updated);
+    localStorage.setItem('sourspark_chat_messages', JSON.stringify(updated));
+
+    // Automated response logic for instant answers
+    setTimeout(() => {
+      let reply = "Merci pour votre message. Un administrateur va vous répondre très bientôt.";
+      const query = text.toLowerCase();
+      if (query.includes('vip') || query.includes('premium') || query.includes('payant')) {
+        reply = "L'abonnement VIP débloque tous les pronostics premium (cotes élevées, HT/FT, BTTS, etc.) pour 30 000 MGA par mois. Sélectionnez 'Passer à Premium' dans le menu pour vous abonner !";
+      } else if (query.includes('gagn') || query.includes('rembours') || query.includes('perdu')) {
+        reply = "Bien que les paris comportent des risques, nos prévisions basées sur des modèles d'intelligence artificielle optimisent la rentabilité au maximum.";
+      } else if (query.includes('/admin')) {
+        reply = "Pour accéder au Panel Administrateur secret, allez dans 'More', puis cliquez 5 fois rapidement sur la version tout en bas. Entrez le code PIN d'administration.";
+      }
+
+      const botMsg: ChatMessage = {
+        id: `bot-msg-${Date.now()}`,
+        userId: currentUser.userId,
+        sender: 'admin',
+        text: reply,
+        timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+      };
+
+      const updatedWithBot = [...updated, botMsg];
+      setChatMessages(updatedWithBot);
+      localStorage.setItem('sourspark_chat_messages', JSON.stringify(updatedWithBot));
+    }, 1500);
+  };
+
+  // Helper to filter matches dynamically across all screens
+  const displayedMatches = useMemo(() => {
+    return matches.filter((match) => {
+      // Date filter
+      if (match.date !== selectedDate) return false;
+
+      // League filter
+      if (selectedLeagueId !== 'all' && match.leagueId !== selectedLeagueId) return false;
+
+      // Search query filter
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const matchesTeams =
+          match.homeTeam.toLowerCase().includes(query) ||
+          match.awayTeam.toLowerCase().includes(query) ||
+          match.leagueName.toLowerCase().includes(query);
+        if (!matchesTeams) return false;
+      }
+
+      return true;
+    });
+  }, [selectedDate, selectedLeagueId, searchQuery]);
+
+  // View titles mappings
+  const viewTitle = useMemo(() => {
+    switch (activeView) {
+      case 'home':
+        return 'Featured Competition';
+      case 'free':
+        return 'Sure Free Tips';
+      case 'best':
+        return '85% Success Best Tips';
+      case 'live':
+        return 'Live Scores & Stats';
+      case 'live-scores':
+        return 'Live Scores';
+      case 'live-tips':
+        return 'Active Live Predictions';
+      case 'vip':
+        return 'Premium VIP Lounge';
+      case 'htft':
+        return 'Half Time / Full Time Tips';
+      case 'single':
+        return 'Single Match Tips';
+      case 'btts':
+        return 'Both Teams To Score (BTTS)';
+      case 'overunder':
+        return 'Over / Under Goals';
+      case 'terms':
+        return "Conditions d'utilisation";
+      case 'privacy':
+        return 'Politique de confidentialité';
+      case 'profile':
+        return 'User Profile';
+      case 'more':
+        return 'More Features';
+      default:
+        return 'Predictions & Tips';
+    }
+  }, [activeView]);
+
+  // 1. Auth Guard (Requires login/registration before accessing the app)
+  if (!currentUser) {
+    return (
+      <AuthScreen
+        onLoginSuccess={(user) => {
+          setCurrentUser(user);
+          localStorage.setItem('sourspark_current_user', JSON.stringify(user));
+        }}
+        allUsers={users}
+        onRegisterUser={(newUser) => {
+          const updated = [...users, newUser];
+          setUsers(updated);
+          localStorage.setItem('sourspark_users', JSON.stringify(updated));
+        }}
+      />
+    );
+  }
+
+  // 1.5 Suspended account check
+  if (currentUser.isSuspended) {
+    return (
+      <div className="mx-auto min-h-screen max-w-md bg-slate-900 text-white flex flex-col items-center justify-center p-8 text-center font-sans">
+        <div className="h-16 w-16 bg-red-500/10 border border-red-500/30 rounded-full flex items-center justify-center text-red-500 mb-6">
+          <Activity className="h-8 w-8 animate-pulse" />
+        </div>
+        <h2 className="text-xl font-black uppercase tracking-tight text-white mb-2">Compte Suspendu</h2>
+        <p className="text-xs text-slate-400 leading-relaxed max-w-xs mb-6">
+          Votre compte (ID: {currentUser.userId}) a été suspendu par l'administrateur de Sourspark. Si vous pensez qu'il s'agit d'une erreur, veuillez contacter le support.
+        </p>
+        <button
+          onClick={() => {
+            localStorage.removeItem('sourspark_current_user');
+            setCurrentUser(null);
+          }}
+          className="w-full max-w-xs py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs uppercase tracking-wider transition-all"
+        >
+          Retourner à la connexion
+        </button>
+      </div>
+    );
+  }
+
+  // 2. Admin View Takeover
+  if (activeView === 'admin') {
+    return (
+      <AdminPanel
+        onClose={() => setActiveView('more')}
+        matches={matches}
+        setMatches={setMatches}
+        leagues={leagues}
+        setLeagues={setLeagues}
+        users={users}
+        setUsers={setUsers}
+        paymentRequests={paymentRequests}
+        setPaymentRequests={setPaymentRequests}
+        liveSignals={liveSignals}
+        setLiveSignals={setLiveSignals}
+        chatMessages={chatMessages}
+        setChatMessages={setChatMessages}
+      />
+    );
+  }
+
+  return (
+    <div className="mx-auto min-h-screen max-w-md bg-slate-50 shadow-2xl flex flex-col relative font-sans">
+      
+      {/* ONBOARDING FLOW PANEL */}
+      {showOnboarding && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-slate-50 text-slate-800 p-6 justify-between max-w-md mx-auto">
+          <div className="space-y-6 pt-12">
+            <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-blue-600 shadow-lg text-white mx-auto animate-bounce">
+              <Trophy className="h-9 w-9" />
+            </div>
+
+            <div className="text-center space-y-2">
+              <h1 className="text-2xl font-black tracking-tight text-slate-900 uppercase font-display">
+                PREDICTIONS SOURSPARK
+              </h1>
+              <p className="text-xs text-slate-500 leading-relaxed max-w-[280px] mx-auto">
+                Rejoignez des milliers de parieurs avisés. Bénéficiez des prédictions de football basées sur l'intelligence artificielle.
+              </p>
+            </div>
+
+            {/* Favorite Selection option */}
+            <div className="bg-white rounded-3xl p-5 border border-slate-200/60 shadow-sm space-y-3">
+              <label className="text-xs font-black text-blue-600 uppercase tracking-wider block text-center">
+                Choisissez votre Ligue Favorite :
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {LEAGUES_LIST.map((league) => (
+                  <button
+                    id={`onboarding-fav-${league.id}`}
+                    key={league.id}
+                    onClick={() => setFavLeague(league.id)}
+                    className={`p-3 rounded-2xl border text-xs font-bold transition-all flex items-center gap-1.5 justify-center ${
+                      favLeague === league.id
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span>{league.logo}</span>
+                    <span className="truncate">{league.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4 pb-8">
+            <button
+              id="btn-onboarding-start"
+              onClick={handleCompleteOnboarding}
+              className="w-full rounded-2xl bg-[#1A237E] hover:bg-indigo-900 py-4 text-sm font-black text-white transition-colors uppercase tracking-wider shadow-md"
+            >
+              COMMENCER LE VOYAGE
+            </button>
+            <p className="text-[10px] text-slate-400 text-center">
+              En continuant, vous acceptez nos conditions d'utilisation et notre politique de confidentialité.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* HEADER SECTION */}
+      <Navbar
+        title={viewTitle}
+        cartCount={cartCount}
+        notificationCount={unreadNotificationCount}
+        onMenuClick={() => setActiveView('more')}
+        onCartClick={() => setIsBetSlipOpen((prev) => !prev)}
+        onNotificationClick={() => setIsNotificationsOpen((prev) => !prev)}
+      />
+
+      {/* DATE STRIP SELECTOR */}
+      {['home', 'free', 'best', 'vip', 'htft', 'single', 'btts', 'overunder'].includes(activeView) && !isNotificationsOpen && !isSupportOpen && (
+        <DateSelector
+          selectedDate={selectedDate}
+          onDateChange={(date) => setSelectedDate(date)}
+        />
+      )}
+
+      {/* MAIN LAYOUT CANVAS CONTAINER */}
+      <main className="flex-1 overflow-y-auto pb-24 bg-slate-50 relative">
+
+        {/* NOTIFICATIONS PANEL HIGHLIGHT OVERLAY */}
+        {isNotificationsOpen ? (
+          <NotificationPanel
+            notifications={notifications}
+            onMarkAsRead={handleMarkAsRead}
+            onClearAll={handleClearNotifications}
+            onClose={() => setIsNotificationsOpen(false)}
+          />
+        ) : isSupportOpen ? (
+          /* SUPPORT CHAT OVERLAY */
+          <SupportChat
+            messages={userSupportMessages}
+            onSendMessage={handleSendMessage}
+            onBack={() => setIsSupportOpen(false)}
+          />
+        ) : (
+          /* STANDARD VIEWS RENDERING SWITCH */
+          <div className="p-4">
+            
+            {/* SEARCH STRIP */}
+            {['home', 'free', 'best', 'vip'].includes(activeView) && (
+              <div className="relative mb-4">
+                <Search className="absolute top-3.5 left-4 h-4 w-4 text-slate-400" />
+                <input
+                  id="main-search-input"
+                  type="text"
+                  placeholder="Rechercher des équipes, ligues..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-white text-slate-800 rounded-2xl py-3 pl-11 pr-4 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200/80 shadow-sm placeholder-slate-400"
+                />
+              </div>
+            )}
+
+            {/* 1. HOME SCREEN */}
+            {activeView === 'home' && (
+              <div className="space-y-4">
+                {/* Featured competition banner at top of Dashboard */}
+                <div className="rounded-3xl bg-white text-slate-800 p-5 border border-slate-100 shadow-sm">
+                  <div className="flex justify-between items-start mb-3">
+                    <span className="rounded-full bg-indigo-50 px-3 py-1 text-[10px] font-bold text-indigo-600 uppercase tracking-wider">
+                      Conseil Vedette
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono font-medium">
+                      Cote Elevée AI
+                    </span>
+                  </div>
+                  <h3 className="text-base font-extrabold text-slate-900">
+                    Arsenal vs Chelsea
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Nos modèles prévoient une domination d'Arsenal à domicile. BTTS est également très probable.
+                  </p>
+                  <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
+                    <span className="text-xs text-slate-500 font-semibold">Prediction: Victoire Arsenal (1)</span>
+                    <span className="text-xs font-bold text-indigo-600">Cote: 1.85</span>
+                  </div>
+                </div>
+
+                {/* Horizontal list of competition filters */}
+                <div>
+                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-400 mb-2 px-1">
+                    Compétitions Majeures
+                  </h4>
+                  <div className="flex gap-2 overflow-x-auto scrollbar-none pb-1">
+                    <button
+                      id="btn-league-filter-all"
+                      onClick={() => setSelectedLeagueId('all')}
+                      className={`px-4 py-2 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all border ${
+                        selectedLeagueId === 'all'
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-white text-slate-600 border-slate-200/80 hover:bg-slate-100'
+                      }`}
+                    >
+                      🌍 Toutes
+                    </button>
+                    {LEAGUES_LIST.map((league) => (
+                      <button
+                        id={`btn-league-filter-${league.id}`}
+                        key={league.id}
+                        onClick={() => setSelectedLeagueId(league.id)}
+                        className={`px-4 py-2 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all border flex items-center gap-1.5 ${
+                          selectedLeagueId === league.id
+                            ? 'bg-blue-600 text-white border-blue-600'
+                            : 'bg-white text-slate-600 border-slate-200/80 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span>{league.logo}</span>
+                        <span>{league.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Match Lists */}
+                <div>
+                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-400 mb-3 px-1">
+                    Matchs Disponibles ({displayedMatches.length})
+                  </h4>
+
+                  {displayedMatches.length > 0 ? (
+                    displayedMatches.map((match) => (
+                      <MatchCard
+                        key={match.id}
+                        match={match}
+                        layout="odds"
+                        onBetClick={handleBetClick}
+                        selectedBet={betSlip.find((b) => b.matchId === match.id)?.choice}
+                      />
+                    ))
+                  ) : (
+                    <div className="text-center py-12 text-slate-400">
+                      <HelpCircle className="h-8 w-8 mx-auto opacity-30 mb-2" />
+                      <p className="text-xs font-bold">Aucun match trouvé pour ce jour</p>
+                      <p className="text-[10px] opacity-70">Essayez de changer de date ou de ligue.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 2. FREE TIPS SCREEN */}
+            {activeView === 'free' && (
+              <div className="space-y-4">
+                {/* Active sub-filters (All, Won, Lost) */}
+                <div className="flex gap-2 bg-slate-200/60 p-1.5 rounded-2xl border border-slate-200">
+                  {['All', 'Pending', 'Won', 'Lost'].map((tab) => (
+                    <button
+                      id={`btn-free-subfilter-${tab}`}
+                      key={tab}
+                      onClick={() => setFreeSubFilter(tab as any)}
+                      className={`flex-1 text-[11px] font-bold py-1.5 rounded-xl transition-all ${
+                        freeSubFilter === tab
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Display Free tips matching requirements */}
+                <div className="space-y-3">
+                  {matches.filter((match) => {
+                    if (match.date !== selectedDate) return false;
+                    if (!match.predictions.isFree) return false;
+                    if (freeSubFilter !== 'All' && match.predictions.status !== freeSubFilter) return false;
+                    return true;
+                  }).map((match) => (
+                    <MatchCard key={match.id} match={match} layout="tip" />
+                  ))}
+
+                  {matches.filter((match) => {
+                    if (match.date !== selectedDate) return false;
+                    if (!match.predictions.isFree) return false;
+                    if (freeSubFilter !== 'All' && match.predictions.status !== freeSubFilter) return false;
+                    return true;
+                  }).length === 0 && (
+                    <div className="text-center py-12 text-slate-400">
+                      <CheckCircle className="h-8 w-8 mx-auto opacity-30 mb-2" />
+                      <p className="text-xs font-bold">Aucun conseil gratuit disponible</p>
+                      <p className="text-[10px] opacity-70">Aucune prédiction pour cette catégorie et cette date.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 3. BEST TIPS SCREEN */}
+            {activeView === 'best' && (
+              <div className="space-y-4">
+                <div className="rounded-3xl bg-amber-50 p-4 border border-amber-200 flex gap-3.5">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-600">
+                    <Sparkles className="h-5 w-5" />
+                  </span>
+                  <div>
+                    <h4 className="text-xs font-black text-amber-950 uppercase tracking-wide">
+                      Success Rate &gt; 85%
+                    </h4>
+                    <p className="text-[10px] text-amber-800 leading-relaxed mt-0.5">
+                      Conseils de pari hautement filtrés et analysés scientifiquement à l'aide d'algorithmes prédictifs profonds.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {matches.filter((match) => match.date === selectedDate && match.predictions.isBest).map(
+                    (match) => (
+                      <MatchCard key={match.id} match={match} layout="tip" />
+                    )
+                  )}
+
+                  {matches.filter((match) => match.date === selectedDate && match.predictions.isBest)
+                    .length === 0 && (
+                    <div className="text-center py-12 text-slate-400">
+                      <HelpCircle className="h-8 w-8 mx-auto opacity-30 mb-2" />
+                      <p className="text-xs font-bold">Pas de conseils Best aujourd'hui</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 4. VIP TIPS SCREEN */}
+            {activeView === 'vip' && (
+              <div className="space-y-4">
+                {/* Premium Banner */}
+                {!isVipSubscribed && (
+                  <div className="rounded-3xl bg-white text-slate-800 p-6 border border-slate-100 shadow-sm text-center space-y-3.5">
+                    <Crown className="h-10 w-10 text-amber-500 mx-auto animate-pulse" />
+                    <div>
+                      <h3 className="text-base font-extrabold uppercase tracking-tight text-slate-900">
+                        Espace Premium VIP
+                      </h3>
+                      <p className="text-[11px] text-slate-500 max-w-[280px] mx-auto mt-1 leading-relaxed">
+                        Accédez de manière illimitée à tous nos conseils haut de gamme avec des cotes fantastiques.
+                      </p>
+                    </div>
+                    <button
+                      id="btn-vip-upgrade-now"
+                      onClick={() => setIsVipModalOpen(true)}
+                      className="rounded-2xl bg-[#1A237E] hover:bg-indigo-900 px-5 py-3 text-xs font-bold text-white transition-colors uppercase tracking-wider shadow-sm"
+                    >
+                      DÉBLOQUER TOUS LES PRONOSTICS VIP
+                    </button>
+                  </div>
+                )}
+
+                {/* List of VIP matches */}
+                <div className="space-y-3">
+                  {matches.filter((match) => match.date === selectedDate && match.predictions.isVip).map(
+                    (match) => (
+                      <MatchCard
+                        key={match.id}
+                        match={match}
+                        layout="tip"
+                        isVipLocked={!isVipSubscribed}
+                        onUnlockVip={() => setIsVipModalOpen(true)}
+                      />
+                    )
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 5. HT-FT SCREEN */}
+            {activeView === 'htft' && (
+              <div className="space-y-3">
+                {matches.filter((match) => match.date === selectedDate).map((match) => (
+                  <div key={match.id} className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm">
+                    <div className="flex justify-between items-center text-[11px] font-bold text-slate-400 border-b border-slate-100 pb-2 mb-2">
+                      <span>{match.leagueName}</span>
+                      <span>{match.matchTime}</span>
+                    </div>
+                    <div className="flex justify-between text-xs font-bold text-slate-800">
+                      <span>{match.homeTeam}</span>
+                      <span className="text-slate-400">vs</span>
+                      <span>{match.awayTeam}</span>
+                    </div>
+                    <div className="mt-3 flex justify-between items-center bg-slate-50 p-2.5 rounded-xl">
+                      <div className="flex items-center gap-1.5 text-xs text-slate-700">
+                        <span className="font-extrabold text-blue-600">HT/FT Tip:</span>
+                        <span className="font-bold">{match.predictions.htFt}</span>
+                      </div>
+                      <span className="rounded-lg bg-emerald-500 text-white font-black px-2 py-1 text-xs">
+                        {match.predictions.htFtOdds.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* 6. SINGLE TIPS SCREEN */}
+            {activeView === 'single' && (
+              <div className="space-y-3">
+                {matches.filter((match) => match.date === selectedDate).map((match) => (
+                  <MatchCard key={match.id} match={match} layout="tip" />
+                ))}
+              </div>
+            )}
+
+            {/* 7. BTTS SCREEN */}
+            {activeView === 'btts' && (
+              <div className="space-y-3">
+                {matches.filter((match) => match.date === selectedDate).map((match) => (
+                  <MatchCard key={match.id} match={match} layout="odds" />
+                ))}
+              </div>
+            )}
+
+            {/* 8. OVER-UNDER SCREEN */}
+            {activeView === 'overunder' && (
+              <div className="space-y-3">
+                {matches.filter((match) => match.date === selectedDate).map((match) => (
+                  <div key={match.id} className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm">
+                    <div className="flex justify-between items-center text-[11px] font-bold text-slate-400 border-b border-slate-100 pb-2 mb-2">
+                      <span>{match.leagueName}</span>
+                      <span>{match.matchTime}</span>
+                    </div>
+                    <div className="flex justify-between text-xs font-bold text-slate-800">
+                      <span>{match.homeTeam}</span>
+                      <span className="text-slate-400">vs</span>
+                      <span>{match.awayTeam}</span>
+                    </div>
+                    <div className="mt-3 flex justify-between items-center bg-slate-50 p-2.5 rounded-xl">
+                      <div className="flex items-center gap-1.5 text-xs text-slate-700">
+                        <span className="font-extrabold text-blue-600">Over/Under 2.5:</span>
+                        <span className="font-bold">{match.predictions.overUnder25}</span>
+                      </div>
+                      <span className="rounded-lg bg-[#fbbf24] text-[#112240] font-black px-2 py-1 text-xs">
+                        {match.predictions.overUnderOdds.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* 8.5 LIVE TOP SIGNALS & ANNOUNCEMENTS SCREEN */}
+            {activeView === 'live-top' && (
+              <div className="space-y-4">
+                
+                {/* Announcements Section */}
+                <div className="space-y-3">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block px-1 flex items-center gap-1">
+                    <Megaphone className="h-3.5 w-3.5 text-amber-500" /> Annonces Administrateur
+                  </span>
+                  {liveSignals.filter(s => s.type === 'announcement').map((ann) => (
+                    <div key={ann.id} className="relative overflow-hidden rounded-3xl bg-slate-900 text-white p-5 border border-slate-800 shadow-md">
+                      <div className="absolute top-0 right-0 p-8 bg-indigo-500/10 rounded-full blur-xl translate-x-8 -translate-y-8" />
+                      <div className="flex justify-between items-baseline mb-2">
+                        <span className="text-[10px] font-extrabold uppercase tracking-widest text-indigo-300">ADMINISTRATEUR</span>
+                        <span className="text-[9px] text-indigo-400 font-mono font-bold">{ann.timestamp}</span>
+                      </div>
+                      <h4 className="text-sm font-black tracking-tight mb-1">{ann.title}</h4>
+                      <p className="text-xs text-indigo-200/90 leading-relaxed font-medium">{ann.content}</p>
+                    </div>
+                  ))}
+                  {liveSignals.filter(s => s.type === 'announcement').length === 0 && (
+                    <div className="p-4 bg-white rounded-3xl border border-slate-100 text-center text-xs text-slate-400">
+                      Aucune annonce officielle pour le moment.
+                    </div>
+                  )}
+                </div>
+
+                {/* Signals Section */}
+                <div className="space-y-3 pt-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block px-1 flex items-center gap-1">
+                    <Activity className="h-3.5 w-3.5 text-emerald-500 animate-pulse" /> Signaux de Matchs en Direct
+                  </span>
+                  {liveSignals.filter(s => s.type === 'signal').map((sig) => {
+                    const isLocked = sig.isPremium && !isVipSubscribed;
+                    return (
+                      <div key={sig.id} className="bg-white rounded-3xl p-5 border border-slate-100 shadow-sm relative overflow-hidden">
+                        
+                        {/* If locked, display gorgeous blur card */}
+                        {isLocked ? (
+                          <div className="space-y-3">
+                            <div className="flex justify-between items-baseline mb-2 select-none filter blur-[1px]">
+                              <span className="text-[10px] font-extrabold uppercase text-amber-500 flex items-center gap-1">
+                                <Crown className="h-3 w-3 fill-current" /> SIGNAL VIP PREMIUM
+                              </span>
+                              <span className="text-[9px] text-slate-400 font-mono font-bold">{sig.timestamp}</span>
+                            </div>
+                            
+                            <h4 className="text-sm font-black text-slate-900 tracking-tight leading-snug select-none filter blur-[4px]">
+                              Manchester City vs Real Madrid
+                            </h4>
+                            <p className="text-xs text-slate-500 leading-relaxed select-none filter blur-[4px]">
+                              Saisissez le signal en direct immédiatement pour optimiser...
+                            </p>
+
+                            {/* Unlock CTA overlay style */}
+                            <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50 to-indigo-100/30 border border-indigo-100 text-center space-y-2 mt-2">
+                              <Crown className="h-6 w-6 text-amber-500 mx-auto animate-bounce" />
+                              <h5 className="text-xs font-black text-[#1A237E] uppercase tracking-wider">Pronostic VIP Verrouillé</h5>
+                              <p className="text-[10px] text-slate-500 leading-relaxed max-w-[280px] mx-auto">
+                                Ce signal exclusif en direct est réservé aux membres VIP Premium de Sourspark.
+                              </p>
+                              <button
+                                onClick={() => setIsVipModalOpen(true)}
+                                className="inline-flex items-center gap-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 px-4 py-2 text-xs font-black text-white transition-all shadow-md uppercase tracking-wider focus:outline-none"
+                              >
+                                Débloquer l'accès (30,000 MGA)
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          /* If free or unlocked, display normal signal */
+                          <div className="space-y-3">
+                            <div className="flex justify-between items-baseline">
+                              <span className={`text-[10px] font-extrabold uppercase ${sig.isPremium ? 'text-amber-500 flex items-center gap-1' : 'text-blue-600'}`}>
+                                {sig.isPremium ? <><Crown className="h-3 w-3 fill-current" /> SIGNAL PREMIUM</> : '📡 SIGNAL GRATUIT'}
+                              </span>
+                              <span className="text-[9px] text-slate-400 font-mono font-bold">{sig.timestamp}</span>
+                            </div>
+                            
+                            <div>
+                              <h4 className="text-sm font-black text-slate-900 tracking-tight leading-snug">
+                                {sig.title}
+                              </h4>
+                              {sig.matchInfo && (
+                                <p className="text-xs text-slate-500 font-bold mt-1">
+                                  Match: <span className="text-slate-800">{sig.matchInfo}</span>
+                                </p>
+                              )}
+                              <p className="text-xs text-slate-500 leading-relaxed mt-1">{sig.content}</p>
+                            </div>
+
+                            {/* Tip Box */}
+                            {sig.prediction && (
+                              <div className="bg-slate-50 p-3 rounded-2xl flex justify-between items-center border border-slate-100">
+                                <div>
+                                  <span className="text-[9px] font-extrabold text-slate-400 block uppercase">CONSEIL DE JEU</span>
+                                  <span className="text-xs font-black text-slate-800">{sig.prediction}</span>
+                                </div>
+                                {sig.odds && (
+                                  <div className="text-right">
+                                    <span className="text-[9px] font-extrabold text-slate-400 block uppercase">COTE</span>
+                                    <span className="rounded-lg bg-emerald-500 text-white font-mono font-black px-2 py-0.5 text-xs">
+                                      {sig.odds.toFixed(2)}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        
+                      </div>
+                    );
+                  })}
+                  {liveSignals.filter(s => s.type === 'signal').length === 0 && (
+                    <div className="p-8 text-center text-xs text-slate-400 bg-white rounded-3xl border border-slate-100">
+                      Aucun signal de match en direct disponible.
+                    </div>
+                  )}
+                </div>
+
+              </div>
+            )}
+
+            {/* 9. LIVE TIPS / SCORE SCREEN */}
+            {activeView === 'live' && (
+              <div className="space-y-4">
+                <div className="flex rounded-2xl bg-slate-200 p-1 border border-slate-300/60">
+                  <button
+                    id="btn-live-subview-scores"
+                    onClick={() => setActiveView('live-scores')}
+                    className="flex-1 text-center py-2 text-xs font-bold rounded-xl bg-white text-slate-900 shadow-sm"
+                  >
+                    🏆 Live Scores
+                  </button>
+                  <button
+                    id="btn-live-subview-tips"
+                    onClick={() => setActiveView('live-tips')}
+                    className="flex-1 text-center py-2 text-xs font-bold text-slate-600 hover:text-slate-900"
+                  >
+                    ⚡ Live Tips
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {matches.filter((match) => match.matchStatus === 'LIVE').map((match) => (
+                    <MatchCard key={match.id} match={match} layout="odds" />
+                  ))}
+
+                  {matches.filter((match) => match.matchStatus === 'LIVE').length === 0 && (
+                    <div className="text-center py-12 text-slate-400 bg-white rounded-3xl border border-slate-100 p-6">
+                      <Activity className="h-8 w-8 mx-auto opacity-30 mb-2 text-emerald-500 animate-pulse" />
+                      <p className="text-xs font-bold">Pas de matchs en direct actuellement</p>
+                      <p className="text-[10px] opacity-70">Consultez l'historique ou attendez la prochaine session.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeView === 'live-scores' && (
+              <div className="space-y-4">
+                <div className="flex rounded-2xl bg-slate-200 p-1 border border-slate-300/60">
+                  <button
+                    id="btn-livescores-scores"
+                    onClick={() => setActiveView('live-scores')}
+                    className="flex-1 text-center py-2 text-xs font-bold rounded-xl bg-white text-slate-900 shadow-sm"
+                  >
+                    🏆 Live Scores
+                  </button>
+                  <button
+                    id="btn-livescores-tips"
+                    onClick={() => setActiveView('live-tips')}
+                    className="flex-1 text-center py-2 text-xs font-bold text-slate-600 hover:text-slate-900"
+                  >
+                    ⚡ Live Tips
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {matches.filter((match) => match.matchStatus === 'LIVE' || match.matchStatus === 'FT').map(
+                    (match) => (
+                      <MatchCard key={match.id} match={match} layout="odds" />
+                    )
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeView === 'live-tips' && (
+              <div className="space-y-4">
+                <div className="flex rounded-2xl bg-slate-200 p-1 border border-slate-300/60">
+                  <button
+                    id="btn-livetips-scores"
+                    onClick={() => setActiveView('live-scores')}
+                    className="flex-1 text-center py-2 text-xs font-bold text-slate-600 hover:text-slate-900"
+                  >
+                    🏆 Live Scores
+                  </button>
+                  <button
+                    id="btn-livetips-tips"
+                    onClick={() => setActiveView('live-tips')}
+                    className="flex-1 text-center py-2 text-xs font-bold rounded-xl bg-white text-slate-900 shadow-sm"
+                  >
+                    ⚡ Live Tips
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {matches.filter((match) => match.matchStatus === 'LIVE').map((match) => (
+                    <div key={match.id} className="bg-white rounded-3xl p-4 border border-slate-100 shadow-md">
+                      <div className="flex justify-between items-center text-[10px] font-bold text-red-600 animate-pulse pb-2 mb-2 border-b border-slate-100">
+                        <span>🔴 EN DIRECT - {match.liveMinute}'</span>
+                        <span>Cote Dynamic</span>
+                      </div>
+                      <h4 className="text-xs font-bold text-slate-800">
+                        {match.homeTeam} {match.finalScoreHome} : {match.finalScoreAway} {match.awayTeam}
+                      </h4>
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        Notre algorithme prédit une forte probabilité de buts supplémentaires.
+                      </p>
+                      <div className="mt-3 bg-red-50 p-2.5 rounded-xl flex justify-between items-center">
+                        <span className="text-xs font-extrabold text-red-800">Direct Tip: Plus de 0.5 But</span>
+                        <span className="rounded bg-red-600 text-white font-mono font-bold px-2 py-0.5 text-xs">
+                          1.42
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+
+                  {matches.filter((match) => match.matchStatus === 'LIVE').length === 0 && (
+                    <div className="text-center py-12 text-slate-400 bg-white rounded-3xl p-6">
+                      <Zap className="h-8 w-8 mx-auto opacity-30 mb-2" />
+                      <p className="text-xs font-bold">Pas d'opportunités en direct</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 10. TERMS & CONDITIONS SCREEN */}
+            {activeView === 'terms' && (
+              <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-md space-y-4 text-xs text-slate-600 leading-relaxed">
+                <h3 className="text-sm font-black text-slate-900 uppercase">Conditions d'utilisation</h3>
+                <p>
+                  Bienvenue sur l'application de predictions Sourspark. En téléchargeant et en accédant à nos services, vous acceptez sans réserve les conditions générales ci-dessous.
+                </p>
+                <h4 className="font-bold text-slate-800 mt-2">1. Responsabilité des paris</h4>
+                <p>
+                  Tous les conseils de paris et prévisions sportifs fournis sur notre plateforme sont à titre informatif uniquement. Nous ne garantissons aucun résultat financier et déclinons toute responsabilité en cas de pertes subies.
+                </p>
+                <h4 className="font-bold text-slate-800 mt-2">2. Accès Premium VIP</h4>
+                <p>
+                  L'accès VIP nécessite un abonnement valide renouvelable automatiquement. L'accès peut être annulé par l'utilisateur à tout moment via son compte de paiement.
+                </p>
+                <button
+                  id="btn-terms-back"
+                  onClick={() => setActiveView('more')}
+                  className="w-full mt-4 rounded-xl bg-slate-800 text-white py-2.5 font-bold"
+                >
+                  Retour
+                </button>
+              </div>
+            )}
+
+            {/* 11. PRIVACY POLICY SCREEN */}
+            {activeView === 'privacy' && (
+              <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-md space-y-4 text-xs text-slate-600 leading-relaxed">
+                <h3 className="text-sm font-black text-slate-900 uppercase">Politique de confidentialité</h3>
+                <p>
+                  La protection de vos données personnelles est au cœur de nos priorités. Nous ne partageons aucune information personnelle avec des tiers à des fins marketing.
+                </p>
+                <h4 className="font-bold text-slate-800 mt-2">Données collectées</h4>
+                <p>
+                  Nous collections uniquement des données d'usage anonymes afin d'améliorer la rapidité et la pertinence de nos algorithmes de prédiction par IA.
+                </p>
+                <button
+                  id="btn-privacy-back"
+                  onClick={() => setActiveView('more')}
+                  className="w-full mt-4 rounded-xl bg-slate-800 text-white py-2.5 font-bold"
+                >
+                  Retour
+                </button>
+              </div>
+            )}
+
+            {/* 12. PROFILE SCREEN */}
+            {activeView === 'profile' && (
+              <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-md space-y-4 text-center">
+                <span className="flex h-16 w-16 items-center justify-center rounded-full bg-[#e0f2fe] text-blue-600 mx-auto font-black text-xl shadow-inner">
+                  LI
+                </span>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">livasetea@gmail.com</h3>
+                  <p className="text-[10px] text-slate-400 uppercase tracking-wider mt-0.5">Membre depuis Juin 2026</p>
+                </div>
+
+                <div className="bg-slate-50 rounded-2xl p-4 text-left space-y-2 border border-slate-100">
+                  <div className="flex justify-between items-center text-xs text-slate-600 py-1 border-b border-slate-100/50">
+                    <span>Statut VIP:</span>
+                    <span className={`font-bold uppercase ${isVipSubscribed ? 'text-amber-500' : 'text-slate-400'}`}>
+                      {isVipSubscribed ? 'Premium Actif' : 'Gratuit'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-xs text-slate-600 py-1">
+                    <span>Ligue Favorite:</span>
+                    <span className="font-bold uppercase">{favLeague} League</span>
+                  </div>
+                </div>
+
+                <button
+                  id="btn-profile-back"
+                  onClick={() => setActiveView('more')}
+                  className="w-full mt-4 rounded-xl bg-slate-800 text-white py-2.5 font-bold"
+                >
+                  Retour
+                </button>
+              </div>
+            )}
+
+            {/* 13. MORE MENU */}
+            {activeView === 'more' && (
+              <MoreSheet
+                onClose={() => setActiveView('home')}
+                onNavigateToView={(view) => setActiveView(view)}
+                onResetOnboarding={handleResetOnboarding}
+                onLogout={handleLogout}
+                onOpenSupport={() => setIsSupportOpen(true)}
+                onOpenPremium={() => setIsVipModalOpen(true)}
+                onOpenAdmin={handleOpenAdmin}
+              />
+            )}
+
+          </div>
+        )}
+      </main>
+
+      {/* BET SLIP / SHOPPING CART OVERLAY SHEET */}
+      {isBetSlipOpen && (
+        <div className="absolute bottom-16 left-0 right-0 z-40 bg-white border-t border-slate-200 rounded-t-3xl shadow-2xl p-4 animate-in slide-in-from-bottom duration-200">
+          <div className="flex justify-between items-center border-b border-slate-100 pb-2 mb-3">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-900 flex items-center gap-1.5">
+              <Calculator className="h-4 w-4 text-blue-600" />
+              Billet de Pari ({betSlip.length})
+            </h3>
+            <button
+              id="btn-betslip-close"
+              onClick={() => setIsBetSlipOpen(false)}
+              className="text-xs font-bold text-slate-400 hover:text-slate-600"
+            >
+              Fermer
+            </button>
+          </div>
+
+          {betSlip.length > 0 ? (
+            <div className="space-y-3 max-h-[180px] overflow-y-auto pr-1">
+              {betSlip.map((item) => {
+                const matchObj = matches.find((m) => m.id === item.matchId);
+                if (!matchObj) return null;
+                return (
+                  <div key={item.matchId} className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl text-xs">
+                    <div>
+                      <span className="font-bold text-slate-800 block">
+                        {matchObj.homeTeam} vs {matchObj.awayTeam}
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-medium">
+                        Pari: {item.choice === '1' ? '1 (Dom.)' : item.choice === 'X' ? 'X (Nul)' : '2 (Ext.)'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="font-extrabold text-emerald-600 font-mono">
+                        {item.odds.toFixed(2)}
+                      </span>
+                      <button
+                        id={`btn-betslip-remove-${item.matchId}`}
+                        onClick={() => removeFromBetSlip(item.matchId)}
+                        className="text-red-500 hover:text-red-700"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Stake input field */}
+              <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-3">
+                <span className="text-xs font-bold text-slate-700">Mise:</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    id="btn-stake-minus"
+                    onClick={() => setStake((prev) => Math.max(5, prev - 5))}
+                    className="flex h-7 w-7 items-center justify-center rounded bg-slate-100 font-bold"
+                  >
+                    <Minus className="h-3.5 w-3.5" />
+                  </button>
+                  <span className="font-bold text-xs text-slate-800 w-12 text-center">{stake}€</span>
+                  <button
+                    id="btn-stake-plus"
+                    onClick={() => setStake((prev) => prev + 5)}
+                    className="flex h-7 w-7 items-center justify-center rounded bg-slate-100 font-bold"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Total Summary */}
+              <div className="flex justify-between items-center text-xs mt-3 pt-2 border-t border-slate-100">
+                <div>
+                  <span className="text-slate-500 block">Cotes totales:</span>
+                  <span className="font-black text-slate-900 font-mono text-sm">{totalOdds.toFixed(2)}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-slate-500 block">Gains potentiels:</span>
+                  <span className="font-black text-emerald-600 font-mono text-base">{potentialWin}€</span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-6 text-slate-400">
+              <p className="text-xs font-medium">Aucune sélection dans votre billet</p>
+              <p className="text-[10px] opacity-70">Cliquez sur une cote pour l'ajouter.</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* BOTTOM NAVIGATION TAB BAR */}
+      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white text-slate-400 border-t border-slate-200/80 max-w-md mx-auto h-16 flex items-center justify-between px-2 shadow-lg overflow-x-auto scrollbar-none">
+        {/* TAB: TIPS */}
+        <button
+          id="btn-nav-tips"
+          onClick={() => {
+            setActiveView('home');
+            setIsNotificationsOpen(false);
+            setIsSupportOpen(false);
+          }}
+          className={`flex-1 flex flex-col items-center justify-center py-1 transition-all focus:outline-none min-w-[50px] ${
+            activeView === 'home' && !isNotificationsOpen && !isSupportOpen
+              ? 'text-blue-600 font-extrabold scale-105'
+              : 'hover:text-slate-700'
+          }`}
+        >
+          <Trophy className="h-4 w-4" />
+          <span className="text-[9px] mt-1 tracking-wider uppercase">Tips</span>
+        </button>
+
+        {/* TAB: FREE */}
+        <button
+          id="btn-nav-free"
+          onClick={() => {
+            setActiveView('free');
+            setIsNotificationsOpen(false);
+            setIsSupportOpen(false);
+          }}
+          className={`flex-1 flex flex-col items-center justify-center py-1 transition-all focus:outline-none min-w-[50px] ${
+            activeView === 'free' && !isNotificationsOpen && !isSupportOpen
+              ? 'text-blue-600 font-extrabold scale-105'
+              : 'hover:text-slate-700'
+          }`}
+        >
+          <Calendar className="h-4 w-4" />
+          <span className="text-[9px] mt-1 tracking-wider uppercase">Free</span>
+        </button>
+
+        {/* TAB: BEST */}
+        <button
+          id="btn-nav-best"
+          onClick={() => {
+            setActiveView('best');
+            setIsNotificationsOpen(false);
+            setIsSupportOpen(false);
+          }}
+          className={`flex-1 flex flex-col items-center justify-center py-1 transition-all focus:outline-none min-w-[50px] ${
+            activeView === 'best' && !isNotificationsOpen && !isSupportOpen
+              ? 'text-blue-600 font-extrabold scale-105'
+              : 'hover:text-slate-700'
+          }`}
+        >
+          <Award className="h-4 w-4" />
+          <span className="text-[9px] mt-1 tracking-wider uppercase">Best</span>
+        </button>
+
+        {/* TAB: LIVE */}
+        <button
+          id="btn-nav-live"
+          onClick={() => {
+            setActiveView('live');
+            setIsNotificationsOpen(false);
+            setIsSupportOpen(false);
+          }}
+          className={`flex-1 flex flex-col items-center justify-center py-1 transition-all focus:outline-none min-w-[50px] ${
+            (activeView === 'live' || activeView === 'live-scores' || activeView === 'live-tips') && !isNotificationsOpen && !isSupportOpen
+              ? 'text-blue-600 font-extrabold scale-105'
+              : 'hover:text-slate-700'
+          }`}
+        >
+          <Activity className="h-4 w-4" />
+          <span className="text-[9px] mt-1 tracking-wider uppercase">Live</span>
+        </button>
+
+        {/* TAB: VIP */}
+        <button
+          id="btn-nav-vip"
+          onClick={() => {
+            setActiveView('vip');
+            setIsNotificationsOpen(false);
+            setIsSupportOpen(false);
+          }}
+          className={`flex-1 flex flex-col items-center justify-center py-1 transition-all focus:outline-none min-w-[50px] ${
+            activeView === 'vip' && !isNotificationsOpen && !isSupportOpen
+              ? 'text-blue-600 font-extrabold scale-105'
+              : 'hover:text-slate-700'
+          }`}
+        >
+          <Crown className="h-4 w-4" />
+          <span className="text-[9px] mt-1 tracking-wider uppercase">Vip</span>
+        </button>
+
+        {/* TAB: HT-FT */}
+        <button
+          id="btn-nav-htft"
+          onClick={() => {
+            setActiveView('htft');
+            setIsNotificationsOpen(false);
+            setIsSupportOpen(false);
+          }}
+          className={`flex-1 flex flex-col items-center justify-center py-1 transition-all focus:outline-none min-w-[50px] ${
+            activeView === 'htft' && !isNotificationsOpen && !isSupportOpen
+              ? 'text-blue-600 font-extrabold scale-105'
+              : 'hover:text-slate-700'
+          }`}
+        >
+          <Sparkles className="h-4 w-4" />
+          <span className="text-[9px] mt-1 tracking-wider uppercase">Ht-Ft</span>
+        </button>
+
+        {/* TAB: LIVE TOP */}
+        <button
+          id="btn-nav-livetop"
+          onClick={() => {
+            setActiveView('live-top');
+            setIsNotificationsOpen(false);
+            setIsSupportOpen(false);
+          }}
+          className={`flex-1 flex flex-col items-center justify-center py-1 transition-all focus:outline-none min-w-[50px] ${
+            activeView === 'live-top' && !isNotificationsOpen && !isSupportOpen
+              ? 'text-blue-600 font-extrabold scale-105'
+              : 'hover:text-slate-700'
+          }`}
+        >
+          <Zap className="h-4 w-4 text-amber-500 animate-pulse" />
+          <span className="text-[9px] mt-1 tracking-wider uppercase">Live Top</span>
+        </button>
+
+        {/* TAB: MORE */}
+        <button
+          id="btn-nav-more"
+          onClick={() => {
+            setActiveView('more');
+            setIsNotificationsOpen(false);
+            setIsSupportOpen(false);
+          }}
+          className={`flex-1 flex flex-col items-center justify-center py-1 transition-all focus:outline-none min-w-[50px] ${
+            (activeView === 'more' || activeView === 'terms' || activeView === 'privacy' || activeView === 'profile') && !isNotificationsOpen && !isSupportOpen
+              ? 'text-blue-600 font-extrabold scale-105'
+              : 'hover:text-slate-700'
+          }`}
+        >
+          <ChevronRight className="h-4 w-4 rotate-90" />
+          <span className="text-[9px] mt-1 tracking-wider uppercase">More</span>
+        </button>
+      </nav>
+
+      {/* PREMIUM VIP ACCÈS SUBSCRIPTION MODAL */}
+      <VipModal
+        isOpen={isVipModalOpen}
+        onClose={() => setIsVipModalOpen(false)}
+        onSubmitPayment={handleSubmitPayment}
+        currentUserPhone={currentUser?.phoneNumber}
+        onSelectPaymentMethod={handleSelectPaymentMethod}
+      />
+
+    </div>
+  );
+}
