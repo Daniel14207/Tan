@@ -6,6 +6,27 @@
 import React from 'react';
 import { Match } from '../types';
 import { ArrowRight, Sparkles, TrendingUp, HelpCircle } from 'lucide-react';
+import { getTeamFlagAndColors } from './PremiumPoster';
+
+function getPredictedScore(match: Match): string {
+  if (match.matchStatus === 'FT' && match.finalScoreHome !== null && match.finalScoreAway !== null) {
+    return `${match.finalScoreHome}-${match.finalScoreAway}`;
+  }
+  const hash = match.id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const tip = match.predictions.singleTip;
+  if (tip === '1') {
+    const homeGoals = (hash % 2) + 1; // 1 or 2
+    const awayGoals = hash % homeGoals; // 0 or 1
+    return `${homeGoals}-${awayGoals}`;
+  } else if (tip === '2') {
+    const awayGoals = (hash % 2) + 1;
+    const homeGoals = hash % awayGoals;
+    return `${homeGoals}-${awayGoals}`;
+  } else {
+    const goals = hash % 2; // 0 or 1
+    return `${goals}-${goals}`;
+  }
+}
 
 interface MatchCardProps {
   key?: string;
@@ -80,114 +101,93 @@ export default function MatchCard({
 
   // 1X2 Style Card
   if (layout === 'odds') {
-    return (
-      <div id={`match-card-${match.id}`} className="mb-4 overflow-hidden rounded-2xl bg-white shadow-md border border-slate-100 transition-all hover:shadow-lg">
-        {/* Card Header */}
-        <div className="flex items-center justify-between bg-slate-50/80 px-4 py-2.5 border-b border-slate-100">
-          <div className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-            🏆 {match.leagueName} matches
-          </div>
-          {getStatusBadge()}
-        </div>
+    const flagA = getTeamFlagAndColors(match.homeTeam).flag;
+    const flagB = getTeamFlagAndColors(match.awayTeam).flag;
+    const predictedScore = getPredictedScore(match);
+    
+    // Determine prediction type and colors
+    const tip = match.predictions.singleTip;
+    let predColor = 'bg-emerald-500 text-white'; // Default Green for 1
+    if (tip === 'X') {
+      predColor = 'bg-amber-400 text-amber-950'; // Yellow for X
+    } else if (tip === '2') {
+      predColor = 'bg-blue-600 text-white'; // Blue for 2
+    } else if (tip === '1X') {
+      predColor = 'bg-emerald-500 text-white';
+    } else if (tip === 'X2') {
+      predColor = 'bg-blue-600 text-white';
+    }
 
-        {/* Card Body - Teams */}
-        <div className="p-5 flex items-center justify-between">
+    const isSelected = selectedBet === tip;
+
+    return (
+      <div 
+        id={`match-card-${match.id}`} 
+        className="mb-3.5 overflow-hidden rounded-3xl bg-white shadow-[0_2px_12px_rgba(0,0,0,0.03)] border border-slate-100/70 transition-all hover:shadow-[0_4px_20px_rgba(0,0,0,0.06)] p-4 flex items-center justify-between gap-4"
+      >
+        {/* Teams and VS Column */}
+        <div className="flex-1 min-w-0 flex items-center justify-between gap-2">
           {/* Home Team */}
-          <div className="flex flex-col items-center w-5/12 text-center">
-            {renderTeamLogo(match.homeTeam, match.homeLogo)}
-            <span className="mt-2 text-sm font-bold text-slate-800 font-sans truncate w-full">
+          <div className="flex items-center gap-2.5 w-[42%]">
+            <span className="text-2xl select-none filter drop-shadow-sm shrink-0">{flagA}</span>
+            <span className="text-xs font-black text-slate-800 font-sans truncate">
               {match.homeTeam}
             </span>
-            {match.finalScoreHome !== null && (
-              <span className="mt-1 text-2xl font-black text-slate-900">
-                {match.finalScoreHome}
-              </span>
-            )}
           </div>
 
-          {/* Time & Arrow */}
-          <div className="flex flex-col items-center w-2/12 justify-center">
-            <span className="text-sm font-black text-slate-700 font-mono">
-              {match.matchTime}
-            </span>
-            <span className="text-[10px] font-bold text-slate-400 mt-0.5">VS</span>
-            <ArrowRight className="h-4 w-4 text-blue-500 mt-2 rotate-90 sm:rotate-0" />
-            
-            {/* Goal Minutes */}
-            {(match.goalMinutes.home.length > 0 || match.goalMinutes.away.length > 0) && (
-              <div className="text-[9px] text-slate-400 text-center mt-2 leading-tight hidden sm:block">
-                {match.goalMinutes.home.join(', ')} / {match.goalMinutes.away.join(', ')}
+          {/* VS Divider or Live/FT Score */}
+          <div className="flex flex-col items-center justify-center shrink-0 w-12">
+            {match.matchStatus === 'FT' && match.finalScoreHome !== null && match.finalScoreAway !== null ? (
+              <div className="text-center">
+                <span className="text-xs font-black text-slate-900 font-mono tracking-tighter bg-slate-100 px-2 py-1 rounded-lg">
+                  {match.finalScoreHome}-{match.finalScoreAway}
+                </span>
+                <span className="text-[7px] font-black uppercase text-green-600 block mt-0.5 tracking-wider">FINI</span>
               </div>
+            ) : match.matchStatus === 'LIVE' && match.finalScoreHome !== null && match.finalScoreAway !== null ? (
+              <div className="text-center">
+                <span className="text-xs font-black text-rose-600 font-mono tracking-tighter bg-rose-50 px-2 py-1 rounded-lg border border-rose-100 animate-pulse">
+                  {match.finalScoreHome}-{match.finalScoreAway}
+                </span>
+                <span className="text-[7px] font-black uppercase text-rose-600 block mt-0.5 tracking-wider">LIVE</span>
+              </div>
+            ) : (
+              <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 bg-slate-50 border border-slate-100 px-2 py-1 rounded-lg">
+                VS
+              </span>
             )}
           </div>
 
           {/* Away Team */}
-          <div className="flex flex-col items-center w-5/12 text-center">
-            {renderTeamLogo(match.awayTeam, match.awayLogo)}
-            <span className="mt-2 text-sm font-bold text-slate-800 font-sans truncate w-full">
+          <div className="flex items-center gap-2.5 w-[42%] justify-end text-right">
+            <span className="text-xs font-black text-slate-800 font-sans truncate order-1">
               {match.awayTeam}
             </span>
-            {match.finalScoreAway !== null && (
-              <span className="mt-1 text-2xl font-black text-slate-900">
-                {match.finalScoreAway}
-              </span>
-            )}
+            <span className="text-2xl select-none filter drop-shadow-sm shrink-0 order-2">{flagB}</span>
           </div>
         </div>
 
-        {/* Stadium & Time Details Bar */}
-        <div className="px-4 py-2 bg-slate-50/50 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-medium">
-          <span className="flex items-center gap-1.5 truncate">
-            🏟️ <strong className="font-bold text-slate-600">{getStadium(match.homeTeam)}</strong>
-          </span>
-          <span className="flex items-center gap-1 font-mono text-slate-400">
-            📅 {match.date.split('-').reverse().join('/')} · ⏰ {match.matchTime}
-          </span>
-        </div>
-
-        {/* Odds Row */}
-        <div className="bg-slate-50/50 px-4 py-3 border-t border-slate-100 flex items-center justify-between gap-2">
-          {/* Bet 1 */}
+        {/* Prediction Cards Column (Right aligned) */}
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Prediction Main Card */}
           <button
-            id={`btn-odds-1-${match.id}`}
-            onClick={() => onBetClick?.(match.id, '1')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border text-xs font-bold transition-all focus:outline-none ${
-              selectedBet === '1'
-                ? 'bg-emerald-500 border-emerald-500 text-white shadow-md shadow-emerald-500/20'
-                : 'bg-white border-slate-200 text-slate-800 hover:border-emerald-500 hover:text-emerald-600'
+            id={`btn-prediction-tip-${match.id}`}
+            onClick={() => onBetClick?.(match.id, tip as any)}
+            className={`w-14 h-14 flex flex-col items-center justify-center rounded-2xl shadow-sm transition-all hover:scale-105 active:scale-95 ${predColor} ${
+              isSelected ? 'ring-2 ring-indigo-500 ring-offset-2 scale-105' : ''
             }`}
           >
-            <span className="opacity-60 text-[10px]">1</span>
-            <span>{match.odds.homeWin.toFixed(2)}</span>
+            <span className="text-[8px] font-bold uppercase tracking-wider opacity-75 leading-none">PRONO</span>
+            <span className="text-base font-black tracking-tighter mt-1 leading-none">{tip}</span>
           </button>
 
-          {/* Bet X */}
-          <button
-            id={`btn-odds-X-${match.id}`}
-            onClick={() => onBetClick?.(match.id, 'X')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border text-xs font-bold transition-all focus:outline-none ${
-              selectedBet === 'X'
-                ? 'bg-emerald-500 border-emerald-500 text-white shadow-md shadow-emerald-500/20'
-                : 'bg-white border-slate-200 text-slate-800 hover:border-emerald-500 hover:text-emerald-600'
-            }`}
-          >
-            <span className="opacity-60 text-[10px]">X</span>
-            <span>{match.odds.draw.toFixed(2)}</span>
-          </button>
-
-          {/* Bet 2 */}
-          <button
-            id={`btn-odds-2-${match.id}`}
-            onClick={() => onBetClick?.(match.id, '2')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border text-xs font-bold transition-all focus:outline-none ${
-              selectedBet === '2'
-                ? 'bg-emerald-500 border-emerald-500 text-white shadow-md shadow-emerald-500/20'
-                : 'bg-white border-slate-200 text-slate-800 hover:border-emerald-500 hover:text-emerald-600'
-            }`}
-          >
-            <span className="opacity-60 text-[10px]">2</span>
-            <span>{match.odds.awayWin.toFixed(2)}</span>
-          </button>
+          {/* Predicted Exact Score Card */}
+          <div className="h-14 px-2.5 flex flex-col items-center justify-center bg-slate-50 border border-slate-100/60 rounded-2xl text-center select-none shrink-0 min-w-[56px]">
+            <span className="text-[8px] font-bold uppercase text-slate-400 tracking-wider leading-none">SCORE</span>
+            <span className="text-xs font-black font-mono text-slate-700 mt-1 leading-none">
+              {predictedScore}
+            </span>
+          </div>
         </div>
       </div>
     );

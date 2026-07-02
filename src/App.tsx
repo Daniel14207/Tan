@@ -21,7 +21,8 @@ import MoreSheet from './components/MoreSheet';
 import AuthScreen from './components/AuthScreen';
 import AdminPanel from './components/AdminPanel';
 import AdminLoginModal from './components/AdminLoginModal';
-import { PremiumPoster } from './components/PremiumPoster';
+import { PremiumPoster, getTeamFlagAndColors } from './components/PremiumPoster';
+import AnalysePremium from './components/AnalysePremium';
 
 import {
   Trophy,
@@ -180,6 +181,24 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState<string>('2026-06-30');
   const [selectedLeagueId, setSelectedLeagueId] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  const [selectedLeagueTab, setSelectedLeagueTab] = useState<'results' | 'matches' | 'standings'>('matches');
+  const [selectedHourIndex, setSelectedHourIndex] = useState<number>(4);
+  const [currentTimeTick, setCurrentTimeTick] = useState<number>(0);
+
+  // Auto-refresh virtual times list
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTimeTick((prev) => prev + 1);
+    }, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Reset tab and active hour when changing league
+  useEffect(() => {
+    setSelectedLeagueTab('matches');
+    setSelectedHourIndex(4);
+  }, [selectedLeagueId]);
   
   // Onboarding state
   const [showOnboarding, setShowOnboarding] = useState<boolean>(() => {
@@ -675,6 +694,82 @@ export default function App() {
     });
   }, [selectedDate, selectedLeagueId, searchQuery]);
 
+  // Generate virtual timetable of 9 hours (spaced by 2 minutes) around current time
+  const currentVirtualTimes = useMemo(() => {
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    
+    // Align to closest even minute
+    const activeMinutes = currentMinutes % 2 === 0 ? currentMinutes : currentMinutes - 1;
+    
+    const times = [];
+    for (let offset = -8; offset <= 8; offset += 2) {
+      const min = activeMinutes + offset;
+      const h = Math.floor((min + 1440) % 1440 / 60);
+      const m = (min + 1440) % 1440 % 60;
+      const formatted = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      times.push({
+        time: formatted,
+        isActive: offset === 0,
+        isPast: offset < 0,
+        isFuture: offset > 0
+      });
+    }
+    return times;
+  }, [currentTimeTick]);
+
+  // Dynamic standings calculation
+  const standings = useMemo(() => {
+    if (selectedLeagueId === 'all') return [];
+    
+    // Get all matches for the selected league
+    const leagueMatches = matches.filter(m => m.leagueId === selectedLeagueId);
+    
+    // Extract unique teams
+    const teamSet = new Set<string>();
+    leagueMatches.forEach(m => {
+      teamSet.add(m.homeTeam);
+      teamSet.add(m.awayTeam);
+    });
+    
+    const teamStats: Record<string, { name: string; played: number; won: number; drawn: number; lost: number; pts: number }> = {};
+    teamSet.forEach(name => {
+      teamStats[name] = { name, played: 0, won: 0, drawn: 0, lost: 0, pts: 0 };
+    });
+    
+    // Calculate stats from completed matches
+    const completedMatches = leagueMatches.filter(m => m.matchStatus === 'FT' && m.finalScoreHome !== null && m.finalScoreAway !== null);
+    
+    completedMatches.forEach(m => {
+      const home = m.homeTeam;
+      const away = m.awayTeam;
+      const hs = m.finalScoreHome!;
+      const as = m.finalScoreAway!;
+      
+      if (teamStats[home] && teamStats[away]) {
+        teamStats[home].played += 1;
+        teamStats[away].played += 1;
+        
+        if (hs > as) {
+          teamStats[home].won += 1;
+          teamStats[home].pts += 3;
+          teamStats[away].lost += 1;
+        } else if (hs < as) {
+          teamStats[away].won += 1;
+          teamStats[away].pts += 3;
+          teamStats[home].lost += 1;
+        } else {
+          teamStats[home].drawn += 1;
+          teamStats[home].pts += 1;
+          teamStats[away].drawn += 1;
+          teamStats[away].pts += 1;
+        }
+      }
+    });
+    
+    return Object.values(teamStats).sort((a, b) => b.pts - a.pts || a.name.localeCompare(b.name));
+  }, [selectedLeagueId, matches]);
+
   // View titles mappings
   const viewTitle = useMemo(() => {
     switch (activeView) {
@@ -706,6 +801,8 @@ export default function App() {
         return 'Politique de confidentialité';
       case 'profile':
         return 'User Profile';
+      case 'analyse-premium':
+        return 'Analyse Premium';
       case 'more':
         return 'More Features';
       default:
@@ -959,29 +1056,251 @@ export default function App() {
                 </div>
 
                 {/* Match Lists */}
-                <div>
-                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-400 mb-3 px-1">
-                    Matchs Disponibles ({displayedMatches.length})
-                  </h4>
-
-                  {displayedMatches.length > 0 ? (
-                    displayedMatches.map((match) => (
-                      <MatchCard
-                        key={match.id}
-                        match={match}
-                        layout="odds"
-                        onBetClick={handleBetClick}
-                        selectedBet={betSlip.find((b) => b.matchId === match.id)?.choice}
-                      />
-                    ))
-                  ) : (
-                    <div className="text-center py-12 text-slate-400">
-                      <HelpCircle className="h-8 w-8 mx-auto opacity-30 mb-2" />
-                      <p className="text-xs font-bold">Aucun match trouvé pour ce jour</p>
-                      <p className="text-[10px] opacity-70">Essayez de changer de date ou de ligue.</p>
+                {selectedLeagueId !== 'all' ? (
+                  /* PREMIUM DETAILED VIRTUAL LEAGUE SYSTEM */
+                  <div className="space-y-4">
+                    {/* BARRE SUPÉRIEURE (Tabs: Résultats, Matchs, Classement) */}
+                    <div className="flex bg-white rounded-2xl p-1 border border-slate-200/80 shadow-[0_2px_12px_rgba(0,0,0,0.02)]">
+                      {(['results', 'matches', 'standings'] as const).map((tab) => {
+                        const labels = {
+                          results: '🏆 Résultats',
+                          matches: '⚽ Matchs',
+                          standings: '📊 Classement'
+                        };
+                        const isActive = selectedLeagueTab === tab;
+                        return (
+                          <button
+                            key={tab}
+                            id={`btn-league-tab-${tab}`}
+                            onClick={() => setSelectedLeagueTab(tab)}
+                            className={`flex-1 text-center py-2.5 text-xs font-black rounded-xl transition-all uppercase tracking-wider ${
+                              isActive
+                                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+                            }`}
+                          >
+                            {labels[tab]}
+                          </button>
+                        );
+                      })}
                     </div>
-                  )}
-                </div>
+
+                    {/* BARRE DES HORAIRES (Timetable) - only if tab is 'matches' */}
+                    {selectedLeagueTab === 'matches' && (
+                      <div className="space-y-2">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block px-1">
+                          Heures Virtuelles (Journées de Match)
+                        </span>
+                        
+                        <div className="flex gap-2 overflow-x-auto scrollbar-none pb-2 pt-1 px-1">
+                          {currentVirtualTimes.map((item, index) => {
+                            const isSelected = selectedHourIndex === index;
+                            return (
+                              <button
+                                key={index}
+                                id={`btn-hour-pill-${index}`}
+                                onClick={() => setSelectedHourIndex(index)}
+                                className={`px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all border flex items-center gap-1.5 shadow-sm ${
+                                  item.isActive
+                                    ? 'bg-rose-500 border-rose-500 text-white shadow-md shadow-rose-500/20' // Active hour is in RED!
+                                    : isSelected
+                                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50/80'
+                                }`}
+                              >
+                                {item.isActive && (
+                                  <span className="relative flex h-2 w-2">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+                                  </span>
+                                )}
+                                <span className={item.isActive ? "font-black" : "font-semibold"}>{item.time}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* CONTENT DISPLAY BASED ON ACTIVE TAB */}
+                    {selectedLeagueTab === 'matches' && (
+                      <div className="space-y-3">
+                        {(() => {
+                          // Get all matches for this league
+                          const leagueMatches = matches.filter(m => m.leagueId === selectedLeagueId);
+                          
+                          // Determine the rounds/days available
+                          const rounds = Array.from(new Set(leagueMatches.map(m => m.round))).sort();
+                          
+                          if (rounds.length === 0) {
+                            return (
+                              <div className="text-center py-12 text-slate-400 bg-white rounded-3xl border border-slate-100 p-6 shadow-sm">
+                                <HelpCircle className="h-8 w-8 mx-auto opacity-30 mb-2" />
+                                <p className="text-xs font-bold">Aucun match trouvé pour cette compétition</p>
+                              </div>
+                            );
+                          }
+
+                          // Map selectedHourIndex (0-8) to available rounds
+                          const roundIndex = Math.min(Math.floor(selectedHourIndex / 3), rounds.length - 1);
+                          const activeRound = rounds[roundIndex];
+                          
+                          // Filter matches for this round
+                          const roundMatches = leagueMatches.filter(m => m.round === activeRound);
+                          
+                          // Decide if we should render them as Live or Pending or FT based on the timetable
+                          const selectedTimeItem = currentVirtualTimes[selectedHourIndex];
+
+                          return (
+                            <div className="space-y-3">
+                              <div className="flex justify-between items-center px-1">
+                                <span className="text-xs font-extrabold text-indigo-950 uppercase tracking-wide">
+                                  {activeRound}
+                                </span>
+                                <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-100 px-2.5 py-1 rounded-xl">
+                                  Session: {selectedTimeItem?.time}
+                                </span>
+                              </div>
+
+                              {roundMatches.map((m) => {
+                                // Dynamically adjust match status based on if past, current, or future
+                                const simulatedMatch = { ...m };
+                                if (selectedTimeItem?.isActive) {
+                                  simulatedMatch.matchStatus = 'LIVE';
+                                  simulatedMatch.liveMinute = 45;
+                                } else if (selectedTimeItem?.isPast) {
+                                  simulatedMatch.matchStatus = 'FT';
+                                } else {
+                                  simulatedMatch.matchStatus = 'Pending';
+                                  simulatedMatch.finalScoreHome = null;
+                                  simulatedMatch.finalScoreAway = null;
+                                }
+
+                                return (
+                                  <MatchCard
+                                    key={m.id}
+                                    match={simulatedMatch}
+                                    layout="odds"
+                                    onBetClick={handleBetClick}
+                                    selectedBet={betSlip.find((b) => b.matchId === m.id)?.choice}
+                                  />
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+
+                    {selectedLeagueTab === 'results' && (
+                      <div className="space-y-3">
+                        {(() => {
+                          const completedMatches = matches.filter(
+                            (m) => m.leagueId === selectedLeagueId && m.matchStatus === 'FT'
+                          );
+
+                          if (completedMatches.length === 0) {
+                            return (
+                              <div className="text-center py-12 text-slate-400 bg-white rounded-3xl border border-slate-100 p-6 shadow-sm">
+                                <Trophy className="h-8 w-8 mx-auto opacity-30 mb-2" />
+                                <p className="text-xs font-bold">Aucun résultat disponible pour le moment</p>
+                              </div>
+                            );
+                          }
+
+                          return completedMatches.map((m) => (
+                            <MatchCard
+                              key={m.id}
+                              match={m}
+                              layout="odds"
+                              onBetClick={handleBetClick}
+                              selectedBet={betSlip.find((b) => b.matchId === m.id)?.choice}
+                            />
+                          ));
+                        })()}
+                      </div>
+                    )}
+
+                    {selectedLeagueTab === 'standings' && (
+                      <div className="bg-white rounded-3xl border border-slate-100/70 shadow-sm p-4 overflow-hidden">
+                        <div className="flex items-center gap-2 mb-4 px-1">
+                          <Trophy className="h-4 w-4 text-indigo-600" />
+                          <h4 className="text-xs font-black text-indigo-950 uppercase tracking-wide">
+                            Classement Général
+                          </h4>
+                        </div>
+
+                        {standings.length > 0 ? (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse">
+                              <thead>
+                                <tr className="border-b border-slate-100 text-[10px] uppercase font-black text-slate-400">
+                                  <th className="py-2.5 pl-2 text-center w-8">#</th>
+                                  <th className="py-2.5">Équipe</th>
+                                  <th className="py-2.5 text-center w-10">MJ</th>
+                                  <th className="py-2.5 text-center w-8">G</th>
+                                  <th className="py-2.5 text-center w-8">N</th>
+                                  <th className="py-2.5 text-center w-8">P</th>
+                                  <th className="py-2.5 text-center pr-2 w-12 text-indigo-600">Pts</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-50">
+                                {standings.map((team, idx) => {
+                                  const flagInfo = getTeamFlagAndColors(team.name);
+                                  return (
+                                    <tr key={team.name} className="hover:bg-slate-50/50 transition-colors text-xs text-slate-700">
+                                      <td className="py-3.5 pl-2 text-center font-bold font-mono text-slate-400">
+                                        {idx + 1}
+                                      </td>
+                                      <td className="py-3.5 font-extrabold flex items-center gap-2 text-slate-900 font-sans">
+                                        <span className="text-base select-none filter drop-shadow-sm">{flagInfo.flag}</span>
+                                        <span className="truncate">{team.name}</span>
+                                      </td>
+                                      <td className="py-3.5 text-center font-semibold text-slate-500">{team.played}</td>
+                                      <td className="py-3.5 text-center text-slate-500">{team.won}</td>
+                                      <td className="py-3.5 text-center text-slate-500">{team.drawn}</td>
+                                      <td className="py-3.5 text-center text-slate-500">{team.lost}</td>
+                                      <td className="py-3.5 text-center font-black text-indigo-600 pr-2">{team.pts}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <div className="text-center py-8 text-xs text-slate-400">
+                            Aucune donnée de classement pour le moment.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* GENERAL HOMEPAGE LISTINGS */
+                  <div>
+                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-400 mb-3 px-1">
+                      Matchs Disponibles ({displayedMatches.length})
+                    </h4>
+
+                    {displayedMatches.length > 0 ? (
+                      displayedMatches.map((match) => (
+                        <MatchCard
+                          key={match.id}
+                          match={match}
+                          layout="odds"
+                          onBetClick={handleBetClick}
+                          selectedBet={betSlip.find((b) => b.matchId === match.id)?.choice}
+                        />
+                      ))
+                    ) : (
+                      <div className="text-center py-12 text-slate-400">
+                        <HelpCircle className="h-8 w-8 mx-auto opacity-30 mb-2" />
+                        <p className="text-xs font-bold">Aucun match trouvé pour ce jour</p>
+                        <p className="text-[10px] opacity-70">Essayez de changer de date ou de ligue.</p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1852,6 +2171,11 @@ export default function App() {
                   Retour
                 </button>
               </div>
+            )}
+
+            {/* 12.5 ANALYSE PREMIUM */}
+            {activeView === 'analyse-premium' && (
+              <AnalysePremium onBack={() => setActiveView('more')} />
             )}
 
             {/* 13. MORE MENU */}

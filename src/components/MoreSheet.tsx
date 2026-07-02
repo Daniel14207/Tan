@@ -25,6 +25,7 @@ import {
   Settings,
   Flame,
   Activity,
+  Sparkles,
 } from 'lucide-react';
 
 import { useState } from 'react';
@@ -130,6 +131,29 @@ export default function MoreSheet({
               </span>
             </div>
             <ChevronRight className="h-4 w-4 text-amber-600" />
+          </button>
+
+          {/* Analyse Premium */}
+          <button
+            id="btn-more-analyse-premium"
+            onClick={() => onNavigateToView('analyse-premium')}
+            className="w-full flex items-center justify-between p-4 rounded-3xl bg-slate-900 hover:bg-slate-950 border border-indigo-500/20 shadow-md transition-all text-left focus:outline-none relative overflow-hidden group cursor-pointer"
+          >
+            <div className="absolute inset-0 bg-indigo-500/5 animate-pulse pointer-events-none" />
+            <div className="flex items-center gap-3.5 relative z-10">
+              <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/35">
+                <Sparkles className="h-5 w-5" />
+              </span>
+              <div>
+                <span className="text-xs font-black text-white uppercase tracking-wide block">
+                  Analyse Premium
+                </span>
+                <span className="text-[10px] text-indigo-300 font-medium block mt-0.5">
+                  Moteur d'analyse prédictive multimodal
+                </span>
+              </div>
+            </div>
+            <ChevronRight className="h-4 w-4 text-indigo-400 relative z-10" />
           </button>
 
           {/* Administrator Button (Visible only after authentication) */}
