@@ -142,7 +142,7 @@ export default function AuthScreen({ onLoginSuccess, allUsers, onRegisterUser }:
   };
 
   return (
-    <div className="mx-auto min-h-screen max-w-md bg-slate-50 shadow-2xl flex flex-col justify-center p-6 relative font-sans">
+    <div className="mx-auto min-h-screen max-w-md premium-soccer-bg shadow-2xl flex flex-col justify-center p-6 relative font-sans">
       
       {/* Container Card */}
       <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-xl space-y-6">

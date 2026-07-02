@@ -29,7 +29,7 @@ export default function NotificationPanel({
   });
 
   return (
-    <div className="w-full bg-slate-50 min-h-[calc(100vh-4rem)] p-4 text-slate-800">
+    <div className="w-full bg-transparent min-h-[calc(100vh-4rem)] p-4 text-slate-800">
       {/* Header card banner */}
       <div className="mb-4 flex items-center gap-4 rounded-3xl bg-white p-4 text-slate-800 shadow-sm border border-slate-100">
         <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 border border-indigo-100">

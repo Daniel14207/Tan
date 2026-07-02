@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 
 import { useState } from 'react';
+import { UserAccount } from '../types';
 
 interface MoreSheetProps {
   onClose: () => void;
@@ -37,6 +38,8 @@ interface MoreSheetProps {
   onOpenSupport: () => void;
   onOpenPremium: () => void;
   onOpenAdmin?: () => void;
+  currentUser?: UserAccount | null;
+  isAdminAuthenticated?: boolean;
 }
 
 export default function MoreSheet({
@@ -47,6 +50,8 @@ export default function MoreSheet({
   onOpenSupport,
   onOpenPremium,
   onOpenAdmin,
+  currentUser,
+  isAdminAuthenticated,
 }: MoreSheetProps) {
   const [clicks, setClicks] = useState(0);
 
@@ -69,10 +74,10 @@ export default function MoreSheet({
           </span>
           <div>
             <h2 className="text-base font-black tracking-tight text-slate-900 leading-tight">
-              More
+              {currentUser?.username || 'More'}
             </h2>
             <span className="text-xs text-slate-500 font-mono">
-              livasetea@gmail.com
+              {currentUser?.phoneNumber || ''}
             </span>
           </div>
         </div>
@@ -126,6 +131,25 @@ export default function MoreSheet({
             </div>
             <ChevronRight className="h-4 w-4 text-amber-600" />
           </button>
+
+          {/* Administrator Button (Visible only after authentication) */}
+          {isAdminAuthenticated && (
+            <button
+              id="btn-more-admin-panel"
+              onClick={() => onNavigateToView('admin')}
+              className="w-full flex items-center justify-between p-4 rounded-3xl bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 shadow-sm transition-all text-left focus:outline-none"
+            >
+              <div className="flex items-center gap-3.5">
+                <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600">
+                  <Lock className="h-5 w-5" />
+                </span>
+                <span className="text-xs font-black text-indigo-950 uppercase tracking-wide">
+                  Panel Administrateur
+                </span>
+              </div>
+              <ChevronRight className="h-4 w-4 text-indigo-600" />
+            </button>
+          )}
         </div>
 
         {/* Featured Competition highlight: World Cup 2026 */}

@@ -79,6 +79,23 @@ export interface UserAccount {
   isVip: boolean;
   isSuspended: boolean;
   createdAt: string;
+  role?: 'admin' | 'user';
+  soldeLiveTop?: number;
+  sigActivationDate?: string;
+  sigExpirationDate?: string;
+  isOnline?: boolean;
+  lastConnectionAt?: string;
+}
+
+export interface BalanceLog {
+  id: string;
+  adminUsername: string;
+  targetUserId: string;
+  targetUsername: string;
+  targetPhone: string;
+  action: 'add' | 'remove' | 'prolong' | 'vip' | 'free' | 'suspend' | 'unsuspend' | 'delete';
+  amount?: number;
+  timestamp: string;
 }
 
 export interface PaymentRequest {
@@ -92,9 +109,27 @@ export interface PaymentRequest {
   timestamp: string;
 }
 
+export interface ParsedMatch {
+  homeTeam: string;
+  awayTeam: string;
+  result: string; // e.g. "1", "X", "2"
+  score: string;  // e.g. "2-0"
+  homeFlag?: string;
+  awayFlag?: string;
+}
+
+export interface LiveSignalComment {
+  id: string;
+  username: string;
+  text: string;
+  timestamp: string;
+  replies?: LiveSignalComment[];
+}
+
 export interface LiveSignal {
   id: string;
   type: 'signal' | 'announcement';
+  postType?: 'text' | 'prediction' | 'image' | 'result' | 'announcement';
   title: string;
   content: string;
   matchInfo?: string;
@@ -102,6 +137,20 @@ export interface LiveSignal {
   odds?: number;
   isPremium: boolean;
   timestamp: string;
+  imageUrl?: string;
+  resultScore?: string;
+  likes?: number;
+  likesUserIds?: string[];
+  comments?: LiveSignalComment[];
+  shares?: number;
+  parsedMatches?: ParsedMatch[];
+  reactions?: {
+    love: number;
+    like: number;
+    fire: number;
+    bravo: number;
+    wow: number;
+  };
 }
 
 export interface ChatMessage {
@@ -110,5 +159,7 @@ export interface ChatMessage {
   sender: 'user' | 'admin';
   text: string;
   timestamp: string;
+  date?: string;
+  status?: 'envoyé' | 'lu';
 }
 

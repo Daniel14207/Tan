@@ -82,7 +82,7 @@ export default function VipModal({ isOpen, onClose, onSubmitPayment, currentUser
           textColor: 'text-[#F16E00]',
           bgLight: 'bg-[#F16E00]/5',
           borderCol: 'border-[#F16E00]/30',
-          instructions: 'Effectuez un transfert de 30 000 MGA au numéro Orange Money : 032 45 678 90 (Nom: SOURSPARK VIP). Gardez le SMS reçu et copiez la référence de la transaction ci-dessous.'
+          instructions: 'Effectuez un transfert de 30 000 MGA au numéro Orange Money : +261 34 259 4678 (Nom: SOURSPARK VIP). Gardez le SMS reçu et copiez la référence de la transaction ci-dessous.'
         };
       case 'airtel':
         return {
@@ -91,7 +91,7 @@ export default function VipModal({ isOpen, onClose, onSubmitPayment, currentUser
           textColor: 'text-red-600',
           bgLight: 'bg-red-50',
           borderCol: 'border-red-200',
-          instructions: 'Effectuez un transfert de 30 000 MGA au numéro Airtel Money : 033 12 345 67 (Nom: SOURSPARK VIP). Gardez le SMS reçu et copiez la référence de la transaction ci-dessous.'
+          instructions: 'Effectuez un transfert de 30 000 MGA au numéro Airtel Money : +261 34 259 4678 (Nom: SOURSPARK VIP). Gardez le SMS reçu et copiez la référence de la transaction ci-dessous.'
         };
       case 'mvola':
         return {
@@ -100,7 +100,7 @@ export default function VipModal({ isOpen, onClose, onSubmitPayment, currentUser
           textColor: 'text-green-600',
           bgLight: 'bg-green-50',
           borderCol: 'border-green-200',
-          instructions: 'Effectuez un transfert de 30 000 MGA au numéro MVola : 034 98 765 43 (Nom: SOURSPARK VIP). Gardez le SMS reçu et copiez la référence de la transaction ci-dessous.'
+          instructions: 'Effectuez un transfert de 30 000 MGA au numéro MVola : +261 34 259 4678 (Nom: SOURSPARK VIP). Gardez le SMS reçu et copiez la référence de la transaction ci-dessous.'
         };
       case 'usdt':
         return {
@@ -109,7 +109,7 @@ export default function VipModal({ isOpen, onClose, onSubmitPayment, currentUser
           textColor: 'text-[#26A17B]',
           bgLight: 'bg-[#26A17B]/5',
           borderCol: 'border-[#26A17B]/20',
-          instructions: 'Envoyez exactement 7.5 USDT (équivalent de 30 000 MGA) à l\'adresse de dépôt TRC20 ci-dessous. Copiez le TxHash de la transaction après envoi.\n\nAdresse: TYgq932KJsjSJDHw92iSJs9182sTRC20'
+          instructions: 'Envoyez exactement 7.5 USDT (équivalent de 30 000 MGA) à l\'adresse de dépôt TRC20 ci-dessous. Copiez le TxHash de la transaction après envoi.\n\nAdresse: TAACqVKdX53yWpwwjDtU5mhdk73vsSXyDt'
         };
     }
   };

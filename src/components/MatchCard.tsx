@@ -25,6 +25,27 @@ export default function MatchCard({
   isVipLocked = false,
   onUnlockVip,
 }: MatchCardProps) {
+  const getStadium = (homeTeam: string) => {
+    const stadiums: Record<string, string> = {
+      'Arsenal': 'Emirates Stadium',
+      'Chelsea': 'Stamford Bridge',
+      'Liverpool': 'Anfield',
+      'Manchester United': 'Old Trafford',
+      'Manchester City': 'Etihad Stadium',
+      'Barcelona': 'Spotify Camp Nou',
+      'Real Madrid': 'Santiago Bernabéu',
+      'Juventus': 'Allianz Stadium',
+      'AC Milan': 'San Siro',
+      'Inter Milan': 'Stadio Giuseppe Meazza',
+      'PSG': 'Parc des Princes',
+      'Marseille': 'Orange Vélodrome',
+      'Bayern Munich': 'Allianz Arena',
+      'Dortmund': 'Signal Iduna Park',
+      'Tottenham': 'Tottenham Hotspur Stadium',
+    };
+    return stadiums[homeTeam] || `${homeTeam} Arena`;
+  };
+
   // Generate beautiful initial circle logo
   const renderTeamLogo = (team: string, classes: string) => {
     const initial = team.substring(0, 2).toUpperCase();
@@ -112,6 +133,16 @@ export default function MatchCard({
               </span>
             )}
           </div>
+        </div>
+
+        {/* Stadium & Time Details Bar */}
+        <div className="px-4 py-2 bg-slate-50/50 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-medium">
+          <span className="flex items-center gap-1.5 truncate">
+            🏟️ <strong className="font-bold text-slate-600">{getStadium(match.homeTeam)}</strong>
+          </span>
+          <span className="flex items-center gap-1 font-mono text-slate-400">
+            📅 {match.date.split('-').reverse().join('/')} · ⏰ {match.matchTime}
+          </span>
         </div>
 
         {/* Odds Row */}
@@ -255,6 +286,16 @@ export default function MatchCard({
           <div className="w-5/12 text-center text-sm font-extrabold text-slate-800">
             {match.awayTeam}
           </div>
+        </div>
+
+        {/* Stadium & Time Details Bar */}
+        <div className="px-1 py-1.5 mt-2 bg-slate-50/40 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-medium rounded-lg">
+          <span className="flex items-center gap-1 truncate max-w-[170px]">
+            🏟️ <strong className="font-bold text-slate-600">{getStadium(match.homeTeam)}</strong>
+          </span>
+          <span className="flex items-center gap-1 font-mono text-slate-400">
+            📅 {match.date.split('-').reverse().join('/')} · ⏰ {match.matchTime}
+          </span>
         </div>
 
         {/* Highlighted betting tips strip */}

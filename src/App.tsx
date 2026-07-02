@@ -8,8 +8,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useMemo } from 'react';
-import { Match, League, NotificationItem, UserAccount, PaymentRequest, LiveSignal, ChatMessage } from './types';
+import { useState, useMemo, useEffect } from 'react';
+import { Match, League, NotificationItem, UserAccount, PaymentRequest, LiveSignal, ChatMessage, BalanceLog } from './types';
 import { MATCHES_DATABASE, LEAGUES_LIST, NOTIFICATIONS_DATABASE } from './data/matchDatabase';
 import Navbar from './components/Navbar';
 import DateSelector from './components/DateSelector';
@@ -20,6 +20,8 @@ import SupportChat from './components/SupportChat';
 import MoreSheet from './components/MoreSheet';
 import AuthScreen from './components/AuthScreen';
 import AdminPanel from './components/AdminPanel';
+import AdminLoginModal from './components/AdminLoginModal';
+import { PremiumPoster } from './components/PremiumPoster';
 
 import {
   Trophy,
@@ -41,6 +43,17 @@ import {
   Minus,
   Trash2,
   Megaphone,
+  MessageSquare,
+  Heart,
+  ThumbsUp,
+  Flame,
+  CornerDownRight,
+  Share2,
+  Send,
+  ArrowLeft,
+  Clock,
+  Lock,
+  Unlock,
 } from 'lucide-react';
 
 export default function App() {
@@ -202,14 +215,97 @@ export default function App() {
   }, [chatMessages, currentUser]);
 
   const [isSupportOpen, setIsSupportOpen] = useState<boolean>(false);
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(() => localStorage.getItem('sourspark_admin_auth') === 'true');
+  const [isAdminLoginModalOpen, setIsAdminLoginModalOpen] = useState<boolean>(false);
 
   // Notifications state
   const [notifications, setNotifications] = useState<NotificationItem[]>(NOTIFICATIONS_DATABASE);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState<boolean>(false);
   const [notificationFilter, setNotificationFilter] = useState<'all' | 'unread'>('all');
 
+  // Premium publication states
+  const [selectedSignal, setSelectedSignal] = useState<LiveSignal | null>(null);
+  const [commentText, setCommentText] = useState('');
+  const [replyingCommentId, setReplyingCommentId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState('');
+  const [hoveredSignalId, setHoveredSignalId] = useState<string | null>(null);
+
   // Free page status sub-filters (Pending, Won, Lost)
   const [freeSubFilter, setFreeSubFilter] = useState<'Pending' | 'Won' | 'Lost' | 'All'>('All');
+
+  // Periodic check for Live TOP balance expiration
+  useEffect(() => {
+    const checkExpiration = () => {
+      const savedUsers = localStorage.getItem('sourspark_users');
+      if (!savedUsers) return;
+      const allUsers: UserAccount[] = JSON.parse(savedUsers);
+      let changed = false;
+
+      const updatedUsers = allUsers.map(u => {
+        if ((u.soldeLiveTop || 0) > 0 && u.sigExpirationDate) {
+          const expTime = new Date(u.sigExpirationDate).getTime();
+          if (Date.now() >= expTime) {
+            changed = true;
+            
+            // Log expiration
+            const systemLog: BalanceLog = {
+              id: `log-exp-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+              adminUsername: 'système_auto',
+              targetUserId: u.userId,
+              targetUsername: u.username,
+              targetPhone: u.phoneNumber,
+              action: 'remove',
+              amount: 0,
+              timestamp: new Date().toISOString()
+            };
+            const currentLogs = JSON.parse(localStorage.getItem('sourspark_balance_logs') || '[]');
+            localStorage.setItem('sourspark_balance_logs', JSON.stringify([systemLog, ...currentLogs]));
+
+            // Push notification
+            const newNotif = {
+              id: `notif-exp-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+              userId: u.userId,
+              title: '❌ Accès Live TOP expiré',
+              message: 'Votre solde Live TOP est arrivé à expiration et a été réinitialisé à 0 Ar. Veuillez renouveler votre abonnement pour continuer à recevoir nos signaux.',
+              timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+              isRead: false
+            };
+            const currentNotifs = JSON.parse(localStorage.getItem('sourspark_notifications') || '[]');
+            localStorage.setItem('sourspark_notifications', JSON.stringify([newNotif, ...currentNotifs]));
+
+            return {
+              ...u,
+              soldeLiveTop: 0,
+              sigActivationDate: undefined,
+              sigExpirationDate: undefined
+            };
+          }
+        }
+        return u;
+      });
+
+      if (changed) {
+        setUsers(updatedUsers);
+        localStorage.setItem('sourspark_users', JSON.stringify(updatedUsers));
+        
+        // Update current user too if matches
+        if (currentUser) {
+          const freshCurrentUser = updatedUsers.find(u => u.userId === currentUser.userId);
+          if (freshCurrentUser) {
+            setCurrentUser(freshCurrentUser);
+            localStorage.setItem('sourspark_current_user', JSON.stringify(freshCurrentUser));
+          } else {
+            setCurrentUser(null);
+            localStorage.removeItem('sourspark_current_user');
+          }
+        }
+      }
+    };
+
+    checkExpiration();
+    const interval = setInterval(checkExpiration, 10000); // Check every 10 seconds
+    return () => clearInterval(interval);
+  }, [currentUser, users]);
 
   // Computed counters
   const cartCount = betSlip.length;
@@ -231,6 +327,129 @@ export default function App() {
     setActiveView('home');
     setIsNotificationsOpen(false);
     setIsSupportOpen(false);
+  };
+
+  // --- PREMIUM PUBLICATION ACTIONS ---
+  const handleReactToSignal = (signalId: string, reactionType: 'love' | 'like' | 'fire' | 'clap' | 'wow') => {
+    const updated = liveSignals.map(sig => {
+      if (sig.id !== signalId) return sig;
+      
+      const currentReactions = sig.reactions || { love: 0, like: 0, fire: 0, clap: 0, wow: 0 };
+      const newReactions = {
+        ...currentReactions,
+        [reactionType]: (currentReactions[reactionType] || 0) + 1
+      };
+      return { ...sig, reactions: newReactions };
+    });
+    setLiveSignals(updated);
+    localStorage.setItem('sourspark_live_signals', JSON.stringify(updated));
+    
+    if (selectedSignal && selectedSignal.id === signalId) {
+      const found = updated.find(s => s.id === signalId);
+      if (found) setSelectedSignal(found);
+    }
+  };
+
+  const handleAddComment = (signalId: string, text: string) => {
+    if (!text.trim()) return;
+    
+    const newComment = {
+      id: 'comment_' + Date.now(),
+      authorName: currentUser ? currentUser.username : 'Visiteur',
+      authorRole: currentUser ? currentUser.role : 'user',
+      text: text,
+      timestamp: new Date().toLocaleDateString('fr-FR') + ' ' + new Date().toTimeString().slice(0, 5),
+      replies: []
+    };
+
+    const updated = liveSignals.map(sig => {
+      if (sig.id !== signalId) return sig;
+      const currentComments = sig.comments || [];
+      return {
+        ...sig,
+        comments: [...currentComments, newComment]
+      };
+    });
+
+    setLiveSignals(updated);
+    localStorage.setItem('sourspark_live_signals', JSON.stringify(updated));
+    
+    if (selectedSignal && selectedSignal.id === signalId) {
+      const found = updated.find(s => s.id === signalId);
+      if (found) setSelectedSignal(found);
+    }
+    setCommentText('');
+  };
+
+  const handleAddReply = (signalId: string, commentId: string, text: string) => {
+    if (!text.trim()) return;
+
+    const newReply = {
+      id: 'reply_' + Date.now(),
+      authorName: currentUser ? currentUser.username : 'Visiteur',
+      authorRole: currentUser ? currentUser.role : 'user',
+      text: text,
+      timestamp: new Date().toLocaleDateString('fr-FR') + ' ' + new Date().toTimeString().slice(0, 5)
+    };
+
+    const updated = liveSignals.map(sig => {
+      if (sig.id !== signalId) return sig;
+      const currentComments = sig.comments || [];
+      const updatedComments = currentComments.map(c => {
+         if (c.id !== commentId) return c;
+         return {
+           ...c,
+           replies: [...(c.replies || []), newReply]
+         };
+      });
+      return {
+        ...sig,
+        comments: updatedComments
+      };
+    });
+
+    setLiveSignals(updated);
+    localStorage.setItem('sourspark_live_signals', JSON.stringify(updated));
+
+    if (selectedSignal && selectedSignal.id === signalId) {
+      const found = updated.find(s => s.id === signalId);
+      if (found) setSelectedSignal(found);
+    }
+    setReplyingCommentId(null);
+    setReplyText('');
+  };
+
+  const handleDeleteCommentOrReply = (signalId: string, commentId: string, replyId?: string) => {
+    const updated = liveSignals.map(sig => {
+      if (sig.id !== signalId) return sig;
+      const currentComments = sig.comments || [];
+      
+      let updatedComments;
+      if (replyId) {
+        updatedComments = currentComments.map(c => {
+          if (c.id !== commentId) return c;
+          return {
+            ...c,
+            replies: (c.replies || []).filter(r => r.id !== replyId)
+          };
+        });
+      } else {
+        updatedComments = currentComments.filter(c => c.id !== commentId);
+      }
+      
+      return {
+        ...sig,
+        comments: updatedComments
+      };
+    });
+
+    setLiveSignals(updated);
+    localStorage.setItem('sourspark_live_signals', JSON.stringify(updated));
+
+    if (selectedSignal && selectedSignal.id === signalId) {
+      const found = updated.find(s => s.id === signalId);
+      setSelectedSignal(found || null);
+    }
   };
 
   // Submit payment helper inside VipModal
@@ -282,13 +501,13 @@ export default function App() {
     // 4. Admin automatic response
     let adminResponseText = "";
     if (method === 'orange') {
-      adminResponseText = "Bonjour ! Pour payer par Orange Money, veuillez envoyer 30 000 MGA au numéro suivant : 032 45 678 90 (Nom: SOURSPARK VIP). Veuillez envoyer une capture d'écran ou la référence du SMS une fois le paiement effectué.";
+      adminResponseText = "Bonjour ! Pour payer par Orange Money, veuillez envoyer 30 000 MGA au numéro suivant : +261 34 259 4678 (Nom: SOURSPARK VIP). Veuillez envoyer une capture d'écran ou la référence du SMS une fois le paiement effectué.";
     } else if (method === 'airtel') {
-      adminResponseText = "Bonjour ! Pour payer par Airtel Money, veuillez envoyer 30 000 MGA au numéro suivant : 033 12 345 67 (Nom: SOURSPARK VIP). Veuillez envoyer une capture d'écran ou la référence du SMS une fois le paiement effectué.";
+      adminResponseText = "Bonjour ! Pour payer par Airtel Money, veuillez envoyer 30 000 MGA au numéro suivant : +261 34 259 4678 (Nom: SOURSPARK VIP). Veuillez envoyer une capture d'écran ou la référence du SMS une fois le paiement effectué.";
     } else if (method === 'mvola') {
-      adminResponseText = "Bonjour ! Pour payer par MVola, veuillez envoyer 30 000 MGA au numéro suivant : 034 98 765 43 (Nom: SOURSPARK VIP). Veuillez envoyer une capture d'écran ou la référence du SMS une fois le paiement effectué.";
+      adminResponseText = "Bonjour ! Pour payer par MVola, veuillez envoyer 30 000 MGA au numéro suivant : +261 34 259 4678 (Nom: SOURSPARK VIP). Veuillez envoyer une capture d'écran ou la référence du SMS une fois le paiement effectué.";
     } else {
-      adminResponseText = "Bonjour ! Pour payer par USDT (TRC20), veuillez envoyer 7.5 USDT à l'adresse suivante : TYgq932KJsjSJDHw92iSJs9182sTRC20. Veuillez copier-coller le TxHash de la transaction après envoi.";
+      adminResponseText = "Bonjour ! Pour payer par USDT (TRC20), veuillez envoyer 7.5 USDT à l'adresse suivante : TAACqVKdX53yWpwwjDtU5mhdk73vsSXyDt. Veuillez copier-coller le TxHash de la transaction après envoi.";
     }
 
     const adminMsg: ChatMessage = {
@@ -331,11 +550,10 @@ export default function App() {
   };
 
   const handleOpenAdmin = () => {
-    const pin = prompt("Saisir le Code PIN d'Administration Sécurisé :");
-    if (pin === '2026') {
+    if (isAdminAuthenticated) {
       setActiveView('admin');
-    } else if (pin !== null) {
-      alert('Code PIN incorrect.');
+    } else {
+      setIsAdminLoginModalOpen(true);
     }
   };
 
@@ -410,7 +628,7 @@ export default function App() {
     // Automated response logic for instant answers
     setTimeout(() => {
       let reply = "Merci pour votre message. Un administrateur va vous répondre très bientôt.";
-      const query = text.toLowerCase();
+      const query = (text || '').toLowerCase();
       if (query.includes('vip') || query.includes('premium') || query.includes('payant')) {
         reply = "L'abonnement VIP débloque tous les pronostics premium (cotes élevées, HT/FT, BTTS, etc.) pour 30 000 MGA par mois. Sélectionnez 'Passer à Premium' dans le menu pour vous abonner !";
       } else if (query.includes('gagn') || query.includes('rembours') || query.includes('perdu')) {
@@ -437,18 +655,19 @@ export default function App() {
   const displayedMatches = useMemo(() => {
     return matches.filter((match) => {
       // Date filter
-      if (match.date !== selectedDate) return false;
+      const matchesDate = selectedDate === 'all_future' ? match.date >= '2026-06-30' : match.date === selectedDate;
+      if (!matchesDate) return false;
 
       // League filter
       if (selectedLeagueId !== 'all' && match.leagueId !== selectedLeagueId) return false;
 
       // Search query filter
       if (searchQuery) {
-        const query = searchQuery.toLowerCase();
+        const query = (searchQuery || '').toLowerCase();
         const matchesTeams =
-          match.homeTeam.toLowerCase().includes(query) ||
-          match.awayTeam.toLowerCase().includes(query) ||
-          match.leagueName.toLowerCase().includes(query);
+          (match.homeTeam || '').toLowerCase().includes(query) ||
+          (match.awayTeam || '').toLowerCase().includes(query) ||
+          (match.leagueName || '').toLowerCase().includes(query);
         if (!matchesTeams) return false;
       }
 
@@ -541,6 +760,11 @@ export default function App() {
     return (
       <AdminPanel
         onClose={() => setActiveView('more')}
+        onAdminLogout={() => {
+          setIsAdminAuthenticated(false);
+          localStorage.removeItem('sourspark_admin_auth');
+          setActiveView('home');
+        }}
         matches={matches}
         setMatches={setMatches}
         leagues={leagues}
@@ -553,26 +777,28 @@ export default function App() {
         setLiveSignals={setLiveSignals}
         chatMessages={chatMessages}
         setChatMessages={setChatMessages}
+        notifications={notifications}
+        setNotifications={setNotifications}
       />
     );
   }
 
   return (
-    <div className="mx-auto min-h-screen max-w-md bg-slate-50 shadow-2xl flex flex-col relative font-sans">
+    <div className="mx-auto min-h-screen max-w-md premium-soccer-bg shadow-2xl flex flex-col relative font-sans">
       
       {/* ONBOARDING FLOW PANEL */}
       {showOnboarding && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-slate-50 text-slate-800 p-6 justify-between max-w-md mx-auto">
+        <div className="fixed inset-0 z-50 flex flex-col premium-soccer-bg text-white p-6 justify-between max-w-md mx-auto">
           <div className="space-y-6 pt-12">
             <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-blue-600 shadow-lg text-white mx-auto animate-bounce">
               <Trophy className="h-9 w-9" />
             </div>
 
             <div className="text-center space-y-2">
-              <h1 className="text-2xl font-black tracking-tight text-slate-900 uppercase font-display">
+              <h1 className="text-2xl font-black tracking-tight text-white uppercase font-display">
                 PREDICTIONS SOURSPARK
               </h1>
-              <p className="text-xs text-slate-500 leading-relaxed max-w-[280px] mx-auto">
+              <p className="text-xs text-slate-200 leading-relaxed max-w-[280px] mx-auto">
                 Rejoignez des milliers de parieurs avisés. Bénéficiez des prédictions de football basées sur l'intelligence artificielle.
               </p>
             </div>
@@ -636,7 +862,7 @@ export default function App() {
       )}
 
       {/* MAIN LAYOUT CANVAS CONTAINER */}
-      <main className="flex-1 overflow-y-auto pb-24 bg-slate-50 relative">
+      <main className="flex-1 overflow-y-auto pb-24 bg-transparent relative">
 
         {/* NOTIFICATIONS PANEL HIGHLIGHT OVERLAY */}
         {isNotificationsOpen ? (
@@ -783,7 +1009,8 @@ export default function App() {
                 {/* Display Free tips matching requirements */}
                 <div className="space-y-3">
                   {matches.filter((match) => {
-                    if (match.date !== selectedDate) return false;
+                    const matchesDate = selectedDate === 'all_future' ? match.date >= '2026-06-30' : match.date === selectedDate;
+                    if (!matchesDate) return false;
                     if (!match.predictions.isFree) return false;
                     if (freeSubFilter !== 'All' && match.predictions.status !== freeSubFilter) return false;
                     return true;
@@ -792,7 +1019,8 @@ export default function App() {
                   ))}
 
                   {matches.filter((match) => {
-                    if (match.date !== selectedDate) return false;
+                    const matchesDate = selectedDate === 'all_future' ? match.date >= '2026-06-30' : match.date === selectedDate;
+                    if (!matchesDate) return false;
                     if (!match.predictions.isFree) return false;
                     if (freeSubFilter !== 'All' && match.predictions.status !== freeSubFilter) return false;
                     return true;
@@ -825,13 +1053,13 @@ export default function App() {
                 </div>
 
                 <div className="space-y-3">
-                  {matches.filter((match) => match.date === selectedDate && match.predictions.isBest).map(
+                  {matches.filter((match) => (selectedDate === 'all_future' ? match.date >= '2026-06-30' : match.date === selectedDate) && match.predictions.isBest).map(
                     (match) => (
                       <MatchCard key={match.id} match={match} layout="tip" />
                     )
                   )}
 
-                  {matches.filter((match) => match.date === selectedDate && match.predictions.isBest)
+                  {matches.filter((match) => (selectedDate === 'all_future' ? match.date >= '2026-06-30' : match.date === selectedDate) && match.predictions.isBest)
                     .length === 0 && (
                     <div className="text-center py-12 text-slate-400">
                       <HelpCircle className="h-8 w-8 mx-auto opacity-30 mb-2" />
@@ -869,7 +1097,7 @@ export default function App() {
 
                 {/* List of VIP matches */}
                 <div className="space-y-3">
-                  {matches.filter((match) => match.date === selectedDate && match.predictions.isVip).map(
+                  {matches.filter((match) => (selectedDate === 'all_future' ? match.date >= '2026-06-30' : match.date === selectedDate) && match.predictions.isVip).map(
                     (match) => (
                       <MatchCard
                         key={match.id}
@@ -887,7 +1115,7 @@ export default function App() {
             {/* 5. HT-FT SCREEN */}
             {activeView === 'htft' && (
               <div className="space-y-3">
-                {matches.filter((match) => match.date === selectedDate).map((match) => (
+                {matches.filter((match) => selectedDate === 'all_future' ? match.date >= '2026-06-30' : match.date === selectedDate).map((match) => (
                   <div key={match.id} className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm">
                     <div className="flex justify-between items-center text-[11px] font-bold text-slate-400 border-b border-slate-100 pb-2 mb-2">
                       <span>{match.leagueName}</span>
@@ -915,7 +1143,7 @@ export default function App() {
             {/* 6. SINGLE TIPS SCREEN */}
             {activeView === 'single' && (
               <div className="space-y-3">
-                {matches.filter((match) => match.date === selectedDate).map((match) => (
+                {matches.filter((match) => selectedDate === 'all_future' ? match.date >= '2026-06-30' : match.date === selectedDate).map((match) => (
                   <MatchCard key={match.id} match={match} layout="tip" />
                 ))}
               </div>
@@ -924,7 +1152,7 @@ export default function App() {
             {/* 7. BTTS SCREEN */}
             {activeView === 'btts' && (
               <div className="space-y-3">
-                {matches.filter((match) => match.date === selectedDate).map((match) => (
+                {matches.filter((match) => selectedDate === 'all_future' ? match.date >= '2026-06-30' : match.date === selectedDate).map((match) => (
                   <MatchCard key={match.id} match={match} layout="odds" />
                 ))}
               </div>
@@ -933,7 +1161,7 @@ export default function App() {
             {/* 8. OVER-UNDER SCREEN */}
             {activeView === 'overunder' && (
               <div className="space-y-3">
-                {matches.filter((match) => match.date === selectedDate).map((match) => (
+                {matches.filter((match) => selectedDate === 'all_future' ? match.date >= '2026-06-30' : match.date === selectedDate).map((match) => (
                   <div key={match.id} className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm">
                     <div className="flex justify-between items-center text-[11px] font-bold text-slate-400 border-b border-slate-100 pb-2 mb-2">
                       <span>{match.leagueName}</span>
@@ -960,125 +1188,444 @@ export default function App() {
 
             {/* 8.5 LIVE TOP SIGNALS & ANNOUNCEMENTS SCREEN */}
             {activeView === 'live-top' && (
-              <div className="space-y-4">
-                
-                {/* Announcements Section */}
-                <div className="space-y-3">
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block px-1 flex items-center gap-1">
-                    <Megaphone className="h-3.5 w-3.5 text-amber-500" /> Annonces Administrateur
-                  </span>
-                  {liveSignals.filter(s => s.type === 'announcement').map((ann) => (
-                    <div key={ann.id} className="relative overflow-hidden rounded-3xl bg-slate-900 text-white p-5 border border-slate-800 shadow-md">
-                      <div className="absolute top-0 right-0 p-8 bg-indigo-500/10 rounded-full blur-xl translate-x-8 -translate-y-8" />
-                      <div className="flex justify-between items-baseline mb-2">
-                        <span className="text-[10px] font-extrabold uppercase tracking-widest text-indigo-300">ADMINISTRATEUR</span>
-                        <span className="text-[9px] text-indigo-400 font-mono font-bold">{ann.timestamp}</span>
+              <div className="space-y-6">
+                {selectedSignal ? (
+                  /* DETAILED PUBLICATION VIEW */
+                  <div className="bg-[#0E1324] border border-slate-800 rounded-3xl p-5 md:p-6 space-y-6 animate-fade-in text-white shadow-xl relative overflow-hidden">
+                    {/* Background glow */}
+                    <div className="absolute top-0 right-0 p-16 bg-indigo-500/10 rounded-full blur-2xl translate-x-8 -translate-y-8 pointer-events-none" />
+
+                    {/* Back header */}
+                    <div className="flex items-center justify-between relative z-10 border-b border-slate-800 pb-4">
+                      <button
+                        onClick={() => setSelectedSignal(null)}
+                        className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-all bg-slate-950/60 hover:bg-slate-950 px-3.5 py-2 rounded-xl border border-slate-800 cursor-pointer shadow-md"
+                      >
+                        <ArrowLeft className="h-4 w-4" />
+                        <span>Retour aux publications</span>
+                      </button>
+
+                      <span className="text-[9px] font-black uppercase text-indigo-400 flex items-center gap-1 bg-indigo-500/10 px-2.5 py-1 rounded-full border border-indigo-500/20">
+                        🏆 PUBLICATION DÉTAILLÉE V2
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-6 pt-2 relative z-10">
+                      {/* Left side: Premium Poster Card */}
+                      <div className="md:col-span-5 flex flex-col items-center justify-center">
+                        <PremiumPoster
+                          title={selectedSignal.title}
+                          time={selectedSignal.timestamp.split(' ')[1] || '14:56'}
+                          matches={selectedSignal.parsedMatches || []}
+                        />
                       </div>
-                      <h4 className="text-sm font-black tracking-tight mb-1">{ann.title}</h4>
-                      <p className="text-xs text-indigo-200/90 leading-relaxed font-medium">{ann.content}</p>
-                    </div>
-                  ))}
-                  {liveSignals.filter(s => s.type === 'announcement').length === 0 && (
-                    <div className="p-4 bg-white rounded-3xl border border-slate-100 text-center text-xs text-slate-400">
-                      Aucune annonce officielle pour le moment.
-                    </div>
-                  )}
-                </div>
 
-                {/* Signals Section */}
-                <div className="space-y-3 pt-2">
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block px-1 flex items-center gap-1">
-                    <Activity className="h-3.5 w-3.5 text-emerald-500 animate-pulse" /> Signaux de Matchs en Direct
-                  </span>
-                  {liveSignals.filter(s => s.type === 'signal').map((sig) => {
-                    const isLocked = sig.isPremium && !isVipSubscribed;
-                    return (
-                      <div key={sig.id} className="bg-white rounded-3xl p-5 border border-slate-100 shadow-sm relative overflow-hidden">
-                        
-                        {/* If locked, display gorgeous blur card */}
-                        {isLocked ? (
-                          <div className="space-y-3">
-                            <div className="flex justify-between items-baseline mb-2 select-none filter blur-[1px]">
-                              <span className="text-[10px] font-extrabold uppercase text-amber-500 flex items-center gap-1">
-                                <Crown className="h-3 w-3 fill-current" /> SIGNAL VIP PREMIUM
+                      {/* Right side: Social Reactions & Details */}
+                      <div className="md:col-span-7 space-y-5 flex flex-col justify-between">
+                        <div className="space-y-4">
+                          <div>
+                            <div className="flex justify-between items-baseline mb-1">
+                              <span className={`text-[10px] font-extrabold uppercase ${selectedSignal.isPremium ? 'text-amber-500 flex items-center gap-1' : 'text-blue-400'}`}>
+                                {selectedSignal.isPremium ? <><Crown className="h-3 w-3 fill-current" /> SOURSPARK PREMIUM VIP</> : '📡 SIGNAL GRATUIT'}
                               </span>
-                              <span className="text-[9px] text-slate-400 font-mono font-bold">{sig.timestamp}</span>
+                              <span className="text-[9px] text-slate-500 font-mono font-bold">{selectedSignal.timestamp}</span>
                             </div>
-                            
-                            <h4 className="text-sm font-black text-slate-900 tracking-tight leading-snug select-none filter blur-[4px]">
-                              Manchester City vs Real Madrid
-                            </h4>
-                            <p className="text-xs text-slate-500 leading-relaxed select-none filter blur-[4px]">
-                              Saisissez le signal en direct immédiatement pour optimiser...
-                            </p>
+                            <h3 className="text-lg font-black text-white tracking-tight leading-snug">
+                              {selectedSignal.title}
+                            </h3>
+                          </div>
 
-                            {/* Unlock CTA overlay style */}
-                            <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50 to-indigo-100/30 border border-indigo-100 text-center space-y-2 mt-2">
-                              <Crown className="h-6 w-6 text-amber-500 mx-auto animate-bounce" />
-                              <h5 className="text-xs font-black text-[#1A237E] uppercase tracking-wider">Pronostic VIP Verrouillé</h5>
-                              <p className="text-[10px] text-slate-500 leading-relaxed max-w-[280px] mx-auto">
-                                Ce signal exclusif en direct est réservé aux membres VIP Premium de Sourspark.
-                              </p>
-                              <button
-                                onClick={() => setIsVipModalOpen(true)}
-                                className="inline-flex items-center gap-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 px-4 py-2 text-xs font-black text-white transition-all shadow-md uppercase tracking-wider focus:outline-none"
-                              >
-                                Débloquer l'accès (30,000 MGA)
-                              </button>
+                          <p className="text-xs text-slate-300 leading-relaxed font-medium bg-slate-950/40 border border-slate-850 p-4 rounded-2xl whitespace-pre-line">
+                            {selectedSignal.content || "Faites l'expérience du nouveau format de publication Premium de Sourspark, conçu de manière professionnelle pour vous offrir le maximum d'efficacité."}
+                          </p>
+
+                          {/* Facebook-style reactions drawer */}
+                          <div className="border-t border-b border-slate-800/60 py-4 space-y-3">
+                            <span className="text-[10px] font-black text-slate-400 uppercase block tracking-wider">
+                              Réactions :
+                            </span>
+                            
+                            <div className="flex flex-wrap items-center gap-2">
+                              {[
+                                { type: 'like' as const, emoji: '👍', label: 'J\'aime', color: 'hover:bg-blue-500/10 hover:border-blue-500/30 text-blue-400' },
+                                { type: 'love' as const, emoji: '❤️', label: 'J\'adore', color: 'hover:bg-rose-500/10 hover:border-rose-500/30 text-rose-400' },
+                                { type: 'fire' as const, emoji: '🔥', label: 'Excellent', color: 'hover:bg-amber-500/10 hover:border-amber-500/30 text-amber-400' },
+                                { type: 'clap' as const, emoji: '👏', label: 'Bravo', color: 'hover:bg-emerald-500/10 hover:border-emerald-500/30 text-emerald-400' },
+                                { type: 'wow' as const, emoji: '😮', label: 'Wow', color: 'hover:bg-indigo-500/10 hover:border-indigo-500/30 text-indigo-400' },
+                              ].map((react) => {
+                                const count = (selectedSignal.reactions && selectedSignal.reactions[react.type]) || 0;
+                                return (
+                                  <button
+                                    key={react.type}
+                                    onClick={() => handleReactToSignal(selectedSignal.id, react.type)}
+                                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-800 bg-slate-950/50 hover:scale-105 active:scale-95 transition-all text-xs font-black cursor-pointer hover:border-slate-700 text-slate-300"
+                                  >
+                                    <span className="text-sm">{react.emoji}</span>
+                                    <span className="text-[10px] text-slate-400">{count}</span>
+                                  </button>
+                                );
+                              })}
                             </div>
                           </div>
-                        ) : (
-                          /* If free or unlocked, display normal signal */
-                          <div className="space-y-3">
-                            <div className="flex justify-between items-baseline">
-                              <span className={`text-[10px] font-extrabold uppercase ${sig.isPremium ? 'text-amber-500 flex items-center gap-1' : 'text-blue-600'}`}>
-                                {sig.isPremium ? <><Crown className="h-3 w-3 fill-current" /> SIGNAL PREMIUM</> : '📡 SIGNAL GRATUIT'}
-                              </span>
-                              <span className="text-[9px] text-slate-400 font-mono font-bold">{sig.timestamp}</span>
-                            </div>
-                            
-                            <div>
-                              <h4 className="text-sm font-black text-slate-900 tracking-tight leading-snug">
-                                {sig.title}
-                              </h4>
-                              {sig.matchInfo && (
-                                <p className="text-xs text-slate-500 font-bold mt-1">
-                                  Match: <span className="text-slate-800">{sig.matchInfo}</span>
-                                </p>
+                        </div>
+
+                        {/* Share section */}
+                        <div className="flex gap-3">
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(window.location.origin + "?signal=" + selectedSignal.id);
+                              alert("Lien de partage copié dans le presse-papiers !");
+                            }}
+                            className="flex-1 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 py-3 font-black rounded-2xl flex items-center justify-center gap-2 text-xs uppercase tracking-widest transition-all shadow-md cursor-pointer"
+                          >
+                            <Share2 className="h-4 w-4" /> Partager ce prono
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Comments section */}
+                    <div className="border-t border-slate-800/80 pt-5 space-y-4">
+                      <h4 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
+                        <MessageSquare className="h-4 w-4 text-indigo-400" />
+                        Commentaires ({selectedSignal.comments?.length || 0})
+                      </h4>
+
+                      {/* Comment Input */}
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleAddComment(selectedSignal.id, commentText);
+                        }}
+                        className="flex gap-2"
+                      >
+                        <input
+                          type="text"
+                          value={commentText}
+                          onChange={(e) => setCommentText(e.target.value)}
+                          placeholder="Écrivez un commentaire public..."
+                          className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-white text-xs focus:outline-none focus:border-indigo-500"
+                        />
+                        <button
+                          type="submit"
+                          className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 rounded-xl flex items-center justify-center transition-all cursor-pointer"
+                        >
+                          <Send className="h-4 w-4" />
+                        </button>
+                      </form>
+
+                      {/* Comments Loop */}
+                      <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                        {(selectedSignal.comments || []).map((comment) => (
+                          <div key={comment.id} className="space-y-2 bg-slate-950/40 border border-slate-850 p-4 rounded-2xl">
+                            <div className="flex justify-between items-start">
+                              <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center font-black text-xs text-indigo-400 border border-slate-700">
+                                  {comment.authorName[0]?.toUpperCase() || 'U'}
+                                </div>
+                                <div>
+                                  <span className="font-extrabold text-white text-xs block">
+                                    {comment.authorName}
+                                    {comment.authorRole === 'admin' && (
+                                      <span className="ml-1.5 text-[8px] uppercase tracking-widest bg-rose-500/10 text-rose-400 border border-rose-500/20 px-1.5 py-0.5 rounded font-black inline-block">
+                                        ADMIN
+                                      </span>
+                                    )}
+                                  </span>
+                                  <span className="text-[9px] text-slate-500 font-mono">{comment.timestamp}</span>
+                                </div>
+                              </div>
+
+                              {isAdminAuthenticated && (
+                                <button
+                                  onClick={() => handleDeleteCommentOrReply(selectedSignal.id, comment.id)}
+                                  className="text-slate-500 hover:text-rose-400 p-1 rounded-lg transition-all cursor-pointer"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
                               )}
-                              <p className="text-xs text-slate-500 leading-relaxed mt-1">{sig.content}</p>
                             </div>
 
-                            {/* Tip Box */}
-                            {sig.prediction && (
-                              <div className="bg-slate-50 p-3 rounded-2xl flex justify-between items-center border border-slate-100">
-                                <div>
-                                  <span className="text-[9px] font-extrabold text-slate-400 block uppercase">CONSEIL DE JEU</span>
-                                  <span className="text-xs font-black text-slate-800">{sig.prediction}</span>
+                            <p className="text-xs text-slate-300 font-medium pl-10 leading-relaxed">{comment.text}</p>
+
+                            <div className="pl-10 flex items-center gap-3">
+                              <button
+                                onClick={() => setReplyingCommentId(replyingCommentId === comment.id ? null : comment.id)}
+                                className="text-[9px] font-black uppercase text-indigo-400 hover:text-indigo-300 transition-all flex items-center gap-1 cursor-pointer"
+                              >
+                                <CornerDownRight className="h-3 w-3" /> Répondre
+                              </button>
+                            </div>
+
+                            {/* Replies */}
+                            {(comment.replies || []).length > 0 && (
+                              <div className="pl-10 space-y-3 pt-2 border-l border-slate-850/80 ml-4">
+                                {comment.replies?.map((reply) => (
+                                  <div key={reply.id} className="space-y-1 bg-slate-950/20 p-3 rounded-xl border border-slate-850/40">
+                                    <div className="flex justify-between items-start">
+                                      <div className="flex items-center gap-1.5">
+                                        <div className="w-5 h-5 rounded-full bg-slate-900 flex items-center justify-center font-black text-[9px] text-amber-400 border border-slate-800">
+                                          {reply.authorName[0]?.toUpperCase() || 'U'}
+                                        </div>
+                                        <span className="font-extrabold text-white text-[10px]">
+                                          {reply.authorName}
+                                          {reply.authorRole === 'admin' && (
+                                            <span className="ml-1 text-[7px] uppercase bg-rose-500/10 text-rose-400 px-1 rounded font-black">
+                                              ADMIN
+                                            </span>
+                                          )}
+                                        </span>
+                                      </div>
+                                      
+                                      {isAdminAuthenticated && (
+                                        <button
+                                          onClick={() => handleDeleteCommentOrReply(selectedSignal.id, comment.id, reply.id)}
+                                          className="text-slate-500 hover:text-rose-400 p-0.5 rounded transition-all cursor-pointer"
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                        </button>
+                                      )}
+                                    </div>
+                                    <p className="text-xs text-slate-300 pl-6.5 leading-relaxed">{reply.text}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Nested Reply Form */}
+                            {replyingCommentId === comment.id && (
+                              <form
+                                onSubmit={(e) => {
+                                  e.preventDefault();
+                                  handleAddReply(selectedSignal.id, comment.id, replyText);
+                                }}
+                                className="pl-10 flex gap-2 pt-2 animate-fade-in"
+                              >
+                                <input
+                                  type="text"
+                                  value={replyText}
+                                  onChange={(e) => setReplyText(e.target.value)}
+                                  placeholder="Écrivez une réponse..."
+                                  className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white text-[11px] focus:outline-none focus:border-indigo-500"
+                                />
+                                <button
+                                  type="submit"
+                                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 rounded-xl flex items-center justify-center transition-all cursor-pointer"
+                                >
+                                  <Send className="h-3 w-3" />
+                                </button>
+                              </form>
+                            )}
+                          </div>
+                        ))}
+
+                        {(selectedSignal.comments || []).length === 0 && (
+                          <p className="text-center py-6 text-xs text-slate-500">Aucun commentaire pour le moment.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* LIST OF PUBLICATIONS SPLIT VIEW */
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-6 animate-fade-in">
+                    
+                    {/* Left Column: Announcements & Main Featured Poster */}
+                    <div className="md:col-span-7 space-y-5">
+                      {/* Announcements */}
+                      <div className="space-y-3">
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block px-1 flex items-center gap-1">
+                          <Megaphone className="h-3.5 w-3.5 text-amber-500 animate-bounce" /> Annonces Officielles
+                        </span>
+                        {liveSignals.filter(s => s.type === 'announcement').map((ann) => (
+                          <div key={ann.id} className="relative overflow-hidden rounded-3xl bg-slate-900 text-white p-5 border border-slate-800 shadow-md">
+                            <div className="absolute top-0 right-0 p-8 bg-indigo-500/10 rounded-full blur-xl translate-x-8 -translate-y-8" />
+                            <div className="flex justify-between items-baseline mb-2">
+                              <span className="text-[10px] font-extrabold uppercase tracking-widest text-indigo-300">ADMINISTRATEUR</span>
+                              <span className="text-[9px] text-indigo-400 font-mono font-bold">{ann.timestamp}</span>
+                            </div>
+                            <h4 className="text-sm font-black tracking-tight mb-1">{ann.title}</h4>
+                            <p className="text-xs text-indigo-200/90 leading-relaxed font-medium">{ann.content}</p>
+                          </div>
+                        ))}
+                        {liveSignals.filter(s => s.type === 'announcement').length === 0 && (
+                          <div className="p-4 bg-white rounded-3xl border border-slate-100 text-center text-xs text-slate-400">
+                            Aucune annonce officielle pour le moment.
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Main Featured Signal Poster */}
+                      <div className="space-y-3 pt-2">
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block px-1 flex items-center gap-1">
+                          <Activity className="h-3.5 w-3.5 text-emerald-500 animate-pulse" /> Publication Récente
+                        </span>
+
+                        {(() => {
+                          const nonAnnouncements = liveSignals.filter(s => s.type === 'signal');
+                          if (nonAnnouncements.length === 0) {
+                            return (
+                              <div className="p-8 text-center text-xs text-slate-400 bg-white rounded-3xl border border-slate-100">
+                                Aucun signal de match en direct disponible.
+                              </div>
+                            );
+                          }
+                          
+                          // Let's take the first non-announcement (most recent)
+                          const mainSig = nonAnnouncements[0];
+                          const isLocked = mainSig.isPremium && !isVipSubscribed;
+
+                          if (isLocked) {
+                            return (
+                              <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-sm relative overflow-hidden space-y-3">
+                                <div className="flex justify-between items-baseline mb-2 select-none filter blur-[1px]">
+                                  <span className="text-[10px] font-extrabold uppercase text-amber-500 flex items-center gap-1">
+                                    <Crown className="h-3 w-3 fill-current" /> SIGNAL VIP PREMIUM
+                                  </span>
+                                  <span className="text-[9px] text-slate-400 font-mono font-bold">{mainSig.timestamp}</span>
                                 </div>
-                                {sig.odds && (
-                                  <div className="text-right">
-                                    <span className="text-[9px] font-extrabold text-slate-400 block uppercase">COTE</span>
-                                    <span className="rounded-lg bg-emerald-500 text-white font-mono font-black px-2 py-0.5 text-xs">
-                                      {sig.odds.toFixed(2)}
+                                <h4 className="text-sm font-black text-slate-900 tracking-tight leading-snug select-none filter blur-[4px]">
+                                  {mainSig.title}
+                                </h4>
+                                
+                                <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50 to-indigo-100/30 border border-indigo-100 text-center space-y-2 mt-2">
+                                  <Crown className="h-6 w-6 text-amber-500 mx-auto animate-bounce" />
+                                  <h5 className="text-xs font-black text-[#1A237E] uppercase tracking-wider">Pronostic VIP Verrouillé</h5>
+                                  <p className="text-[10px] text-slate-500 leading-relaxed max-w-[280px] mx-auto">
+                                    Ce signal exclusif en direct est réservé aux membres VIP Premium de Sourspark.
+                                  </p>
+                                  <button
+                                    onClick={() => setIsVipModalOpen(true)}
+                                    className="inline-flex items-center gap-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 px-4 py-2 text-xs font-black text-white transition-all shadow-md uppercase tracking-wider focus:outline-none cursor-pointer"
+                                  >
+                                    Débloquer l'accès (30,000 MGA)
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          // If unlocked, render a gorgeous poster element!
+                          return (
+                            <div 
+                              onClick={() => setSelectedSignal(mainSig)}
+                              className="bg-[#0b1227] hover:bg-[#0f1936] text-white rounded-3xl p-5 border border-slate-800 shadow-xl relative overflow-hidden transition-all transform hover:-translate-y-1 cursor-pointer group space-y-4"
+                            >
+                              <div className="absolute top-0 right-0 p-12 bg-amber-500/10 rounded-full blur-xl pointer-events-none group-hover:bg-amber-500/15 transition-all" />
+                              
+                              <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+                                <span className="text-[9px] font-extrabold uppercase text-amber-400 flex items-center gap-1">
+                                  <Crown className="h-3.5 w-3.5 fill-current" /> SOURSPARK PREMIUM VIP
+                                </span>
+                                <span className="text-[9px] text-slate-400 font-mono font-bold">{mainSig.timestamp}</span>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-12 gap-5 items-center">
+                                <div className="sm:col-span-5 flex justify-center">
+                                  <div className="transform scale-95 group-hover:scale-100 transition-all duration-300">
+                                    <PremiumPoster
+                                      title={mainSig.title}
+                                      time={mainSig.timestamp.split(' ')[1] || '14:56'}
+                                      matches={mainSig.parsedMatches || []}
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="sm:col-span-7 space-y-3">
+                                  <h4 className="text-base font-black tracking-tight text-white leading-snug group-hover:text-amber-400 transition-all">
+                                    {mainSig.title}
+                                  </h4>
+                                  <p className="text-xs text-slate-300 line-clamp-3 leading-relaxed">
+                                    {mainSig.content || "Cliquez sur cette publication pour voir l'analyse complète, réagir en temps réel, commenter et échanger des conseils avec les autres membres VIP."}
+                                  </p>
+                                  
+                                  {/* Interaction Summary footer */}
+                                  <div className="flex items-center gap-4 text-[10px] text-slate-400 font-bold pt-2 border-t border-slate-800/60">
+                                    <span className="flex items-center gap-1.5">
+                                      👍 {(Object.values(mainSig.reactions || {}) as number[]).reduce((a, b) => a + b, 0)} réactions
                                     </span>
+                                    <span>•</span>
+                                    <span className="flex items-center gap-1.5">
+                                      💬 {mainSig.comments?.length || 0} commentaires
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    </div>
+
+                    {/* Right Column: "TOUS LES TOPS" (Historic list) */}
+                    <div className="md:col-span-5 space-y-3">
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block px-1 flex items-center gap-1">
+                        <Trophy className="h-3.5 w-3.5 text-amber-500" /> TOUS LES TOPS ({liveSignals.filter(s => s.type === 'signal').length})
+                      </span>
+                      
+                      <div className="bg-white rounded-3xl border border-slate-100 p-4 space-y-3 max-h-[500px] overflow-y-auto pr-1 shadow-sm custom-scrollbar">
+                        {liveSignals.filter(s => s.type === 'signal').map((sig) => {
+                          const totalReactions = (Object.values(sig.reactions || {}) as number[]).reduce((a, b) => a + b, 0);
+                          const totalComments = sig.comments?.length || 0;
+                          const isSigLocked = sig.isPremium && !isVipSubscribed;
+
+                          return (
+                            <div
+                              key={sig.id}
+                              onClick={() => setSelectedSignal(sig)}
+                              onMouseEnter={() => setHoveredSignalId(sig.id)}
+                              onMouseLeave={() => setHoveredSignalId(null)}
+                              className="p-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-100 hover:border-slate-200 rounded-2xl transition-all cursor-pointer flex justify-between items-center gap-3 relative overflow-hidden group"
+                            >
+                              {/* Left details */}
+                              <div className="flex-1 min-w-0 space-y-1">
+                                <div className="flex items-center gap-1.5">
+                                  <Trophy className={`h-3.5 w-3.5 shrink-0 ${isSigLocked ? 'text-slate-400' : 'text-amber-500 animate-pulse'}`} />
+                                  <span className="font-extrabold text-slate-800 text-[11px] truncate block">
+                                    {sig.title}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 text-[9px] text-slate-400 font-mono">
+                                  <span>{sig.timestamp}</span>
+                                  <span>•</span>
+                                  {isSigLocked ? (
+                                    <span className="text-amber-500 font-extrabold uppercase flex items-center gap-0.5">
+                                      <Crown className="h-2.5 w-2.5 fill-current" /> VIP
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-500">
+                                      👍 {totalReactions}  💬 {totalComments}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Right thumbnail preview of flags */}
+                              <div className="w-16 h-12 bg-[#0b1227] rounded-xl border border-amber-500/10 flex items-center justify-center shrink-0 relative overflow-hidden">
+                                <div className="absolute inset-0 bg-gradient-to-br from-amber-500/10 to-transparent opacity-40" />
+                                {isSigLocked ? (
+                                  <Crown className="h-4 w-4 text-amber-500" />
+                                ) : (
+                                  <div className="flex gap-0.5 items-center justify-center">
+                                    {sig.parsedMatches?.slice(0, 2).map((pm, i) => (
+                                      <span key={i} className="text-xs">{pm.homeFlag}</span>
+                                    ))}
+                                    {sig.parsedMatches && sig.parsedMatches.length > 2 && (
+                                      <span className="text-[7px] text-amber-400 font-bold ml-0.5">+{sig.parsedMatches.length - 2}</span>
+                                    )}
                                   </div>
                                 )}
                               </div>
-                            )}
-                          </div>
+                            </div>
+                          );
+                        })}
+                        {liveSignals.filter(s => s.type === 'signal').length === 0 && (
+                          <p className="text-center py-8 text-xs text-slate-400">Aucune publication d'historique disponible.</p>
                         )}
-                        
                       </div>
-                    );
-                  })}
-                  {liveSignals.filter(s => s.type === 'signal').length === 0 && (
-                    <div className="p-8 text-center text-xs text-slate-400 bg-white rounded-3xl border border-slate-100">
-                      Aucun signal de match en direct disponible.
                     </div>
-                  )}
-                </div>
 
+                  </div>
+                )}
               </div>
             )}
 
@@ -1248,10 +1795,11 @@ export default function App() {
             {activeView === 'profile' && (
               <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-md space-y-4 text-center">
                 <span className="flex h-16 w-16 items-center justify-center rounded-full bg-[#e0f2fe] text-blue-600 mx-auto font-black text-xl shadow-inner">
-                  LI
+                  {currentUser?.username ? currentUser.username.slice(0, 2).toUpperCase() : 'US'}
                 </span>
                 <div>
-                  <h3 className="text-base font-black text-slate-900">livasetea@gmail.com</h3>
+                  <h3 className="text-base font-black text-slate-900">{currentUser?.username || 'Utilisateur'}</h3>
+                  <p className="text-xs text-slate-500 font-mono mt-0.5">{currentUser?.phoneNumber || ''}</p>
                   <p className="text-[10px] text-slate-400 uppercase tracking-wider mt-0.5">Membre depuis Juin 2026</p>
                 </div>
 
@@ -1262,10 +1810,38 @@ export default function App() {
                       {isVipSubscribed ? 'Premium Actif' : 'Gratuit'}
                     </span>
                   </div>
+                  <div className="flex justify-between items-center text-xs text-slate-600 py-1 border-b border-slate-100/50">
+                    <span>Solde Live TOP:</span>
+                    <span className="font-bold text-emerald-600 font-mono">
+                      {(currentUser?.soldeLiveTop || 0).toLocaleString('fr-FR')} Ar
+                    </span>
+                  </div>
                   <div className="flex justify-between items-center text-xs text-slate-600 py-1">
                     <span>Ligue Favorite:</span>
                     <span className="font-bold uppercase">{favLeague} League</span>
                   </div>
+
+                  {(currentUser?.soldeLiveTop || 0) > 0 && currentUser?.sigExpirationDate && (
+                    <div className="text-[10px] text-slate-400 bg-emerald-50/50 p-2.5 rounded-xl text-left mt-2 border border-emerald-100/30 flex flex-col gap-0.5">
+                      <div className="flex justify-between text-slate-600 font-medium">
+                        <span>Expiration Live TOP:</span>
+                        <span className="font-extrabold text-slate-800">
+                          {new Date(currentUser.sigExpirationDate).toLocaleString('fr-FR', {
+                            day: 'numeric',
+                            month: 'short',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-slate-600 font-medium mt-0.5">
+                        <span>Accès Activé:</span>
+                        <span className="font-extrabold text-emerald-600 uppercase tracking-wide">
+                          ACTIF (Signaux débloqués)
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <button
@@ -1288,6 +1864,8 @@ export default function App() {
                 onOpenSupport={() => setIsSupportOpen(true)}
                 onOpenPremium={() => setIsVipModalOpen(true)}
                 onOpenAdmin={handleOpenAdmin}
+                currentUser={currentUser}
+                isAdminAuthenticated={isAdminAuthenticated}
               />
             )}
 
@@ -1497,22 +2075,24 @@ export default function App() {
         </button>
 
         {/* TAB: LIVE TOP */}
-        <button
-          id="btn-nav-livetop"
-          onClick={() => {
-            setActiveView('live-top');
-            setIsNotificationsOpen(false);
-            setIsSupportOpen(false);
-          }}
-          className={`flex-1 flex flex-col items-center justify-center py-1 transition-all focus:outline-none min-w-[50px] ${
-            activeView === 'live-top' && !isNotificationsOpen && !isSupportOpen
-              ? 'text-blue-600 font-extrabold scale-105'
-              : 'hover:text-slate-700'
-          }`}
-        >
-          <Zap className="h-4 w-4 text-amber-500 animate-pulse" />
-          <span className="text-[9px] mt-1 tracking-wider uppercase">Live Top</span>
-        </button>
+        {(isAdminAuthenticated || (currentUser && (currentUser.soldeLiveTop || 0) > 0)) && (
+          <button
+            id="btn-nav-livetop"
+            onClick={() => {
+              setActiveView('live-top');
+              setIsNotificationsOpen(false);
+              setIsSupportOpen(false);
+            }}
+            className={`flex-1 flex flex-col items-center justify-center py-1 transition-all focus:outline-none min-w-[50px] ${
+              activeView === 'live-top' && !isNotificationsOpen && !isSupportOpen
+                ? 'text-blue-600 font-extrabold scale-105'
+                : 'hover:text-slate-700'
+            }`}
+          >
+            <Zap className="h-4 w-4 text-amber-500 animate-pulse" />
+            <span className="text-[9px] mt-1 tracking-wider uppercase">Live Top</span>
+          </button>
+        )}
 
         {/* TAB: MORE */}
         <button
@@ -1531,6 +2111,22 @@ export default function App() {
           <ChevronRight className="h-4 w-4 rotate-90" />
           <span className="text-[9px] mt-1 tracking-wider uppercase">More</span>
         </button>
+
+        {/* TAB: ADMIN */}
+        <button
+          id="btn-nav-admin"
+          onClick={() => {
+            handleOpenAdmin();
+          }}
+          className={`flex-1 flex flex-col items-center justify-center py-1 transition-all focus:outline-none min-w-[50px] ${
+            activeView === 'admin' && !isNotificationsOpen && !isSupportOpen
+              ? 'text-blue-600 font-extrabold scale-105'
+              : 'hover:text-slate-700'
+          }`}
+        >
+          <ShieldAlert className="h-4 w-4" />
+          <span className="text-[9px] mt-1 tracking-wider uppercase">Admin</span>
+        </button>
       </nav>
 
       {/* PREMIUM VIP ACCÈS SUBSCRIPTION MODAL */}
@@ -1540,6 +2136,17 @@ export default function App() {
         onSubmitPayment={handleSubmitPayment}
         currentUserPhone={currentUser?.phoneNumber}
         onSelectPaymentMethod={handleSelectPaymentMethod}
+      />
+
+      {/* SECURE ADMIN LOGIN MODAL */}
+      <AdminLoginModal
+        isOpen={isAdminLoginModalOpen}
+        onClose={() => setIsAdminLoginModalOpen(false)}
+        onSuccess={() => {
+          setIsAdminAuthenticated(true);
+          localStorage.setItem('sourspark_admin_auth', 'true');
+          setActiveView('admin');
+        }}
       />
 
     </div>
