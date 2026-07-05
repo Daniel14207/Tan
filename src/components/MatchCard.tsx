@@ -27,8 +27,8 @@ interface MatchCardProps {
   key?: any;
   match: Match;
   layout?: 'odds' | 'tip'; // 'odds' for 1X2 selector style, 'tip' for focus prediction style
-  onBetClick?: (matchId: string, choice: '1' | 'X' | '2') => void;
-  selectedBet?: '1' | 'X' | '2';
+  onBetClick?: (matchId: string, choice: string, odds?: number) => void;
+  selectedBet?: string;
   isVipLocked?: boolean;
   onUnlockVip?: () => void;
   onDetailClick?: (match: Match) => void;

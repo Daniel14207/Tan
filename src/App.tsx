@@ -115,18 +115,29 @@ export default function App() {
   const [, setMatches] = useState<Match[]>([]); // Keeps other setMatches references fully compatible
 
   // --- VIRTUAL SPORTSBOOK ENGINE STATES ---
-  const [secondsRemaining, setSecondsRemaining] = useState<number>(() => {
-    const secondsIntoCycle = Math.floor((Date.now() / 1000) % 120);
-    return 120 - secondsIntoCycle;
+  const [cycleSeconds, setCycleSeconds] = useState<number>(() => {
+    return Math.floor((Date.now() / 1000) % 190);
   });
 
-  const currentCycleIndex = Math.floor(Date.now() / 120000);
+  const [currentCycleIndex, setCurrentCycleIndex] = useState<number>(() => {
+    return Math.floor((Date.now() / 1000) / 190);
+  });
+
+  const [secondsRemaining, setSecondsRemaining] = useState<number>(() => {
+    const elapsed = Math.floor((Date.now() / 1000) % 190);
+    return elapsed < 120 ? 120 - elapsed : 0;
+  });
+
   const [selectedDate, setSelectedDate] = useState<string>('2026-06-30');
 
   useEffect(() => {
     const interval = setInterval(() => {
-      const secondsIntoCycle = Math.floor((Date.now() / 1000) % 120);
-      setSecondsRemaining(120 - secondsIntoCycle);
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const elapsed = nowSeconds % 190;
+      const cIndex = Math.floor(nowSeconds / 190);
+      setCycleSeconds(elapsed);
+      setCurrentCycleIndex(cIndex);
+      setSecondsRemaining(elapsed < 120 ? 120 - elapsed : 0);
     }, 1000);
     return () => clearInterval(interval);
   }, []);
@@ -168,25 +179,35 @@ export default function App() {
   // Infinite dynamic virtual matches list
   const matches = useMemo(() => {
     const results: Match[] = [];
-    const secondsIntoCycle = 120 - secondsRemaining;
     
-    // Determine live status variables
-    // First 15 seconds: pre-match (score 0-0, live minute is 'Pre-match')
-    // Next 85 seconds: live match (minute counts from 1 to 90)
-    // Last 20 seconds: completed full-time (score is final, status is FT)
-    let liveStatus: 'Pending' | 'LIVE' | 'FT' = 'LIVE';
+    let currentPhase: 'COUNTDOWN' | 'FIRST_HALF' | 'HALF_TIME' | 'SECOND_HALF' | 'FULL_TIME' = 'COUNTDOWN';
     let liveMinute: number | undefined = undefined;
+    let currentMatchStatus: 'Pending' | 'LIVE' | 'FT' = 'Pending';
     
-    if (secondsIntoCycle < 15) {
-      liveStatus = 'LIVE';
-      liveMinute = 0; // Pre-match intro
-    } else if (secondsIntoCycle < 100) {
-      liveStatus = 'LIVE';
-      // Map 15..100 seconds to 1..90 minutes
-      const progress = (secondsIntoCycle - 15) / 85;
-      liveMinute = Math.min(90, Math.max(1, Math.floor(progress * 90)));
+    if (cycleSeconds < 120) {
+      currentPhase = 'COUNTDOWN';
+      currentMatchStatus = 'Pending';
+      liveMinute = undefined;
+    } else if (cycleSeconds < 145) {
+      currentPhase = 'FIRST_HALF';
+      currentMatchStatus = 'LIVE';
+      const step = Math.min(Math.floor(((cycleSeconds - 120) / 25) * 10), 9);
+      const firstHalfMinutes = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45];
+      liveMinute = firstHalfMinutes[step];
+    } else if (cycleSeconds < 150) {
+      currentPhase = 'HALF_TIME';
+      currentMatchStatus = 'LIVE';
+      liveMinute = 45;
+    } else if (cycleSeconds < 175) {
+      currentPhase = 'SECOND_HALF';
+      currentMatchStatus = 'LIVE';
+      const step = Math.min(Math.floor(((cycleSeconds - 150) / 25) * 10), 9);
+      const secondHalfMinutes = [46, 50, 55, 60, 65, 70, 75, 80, 85, 90];
+      liveMinute = secondHalfMinutes[step];
     } else {
-      liveStatus = 'FT'; // Settle results in last 20 seconds
+      currentPhase = 'FULL_TIME';
+      currentMatchStatus = 'FT';
+      liveMinute = 90;
     }
 
     LEAGUES_LIST.forEach((league) => {
@@ -195,39 +216,44 @@ export default function App() {
         const matchesForRound = generateVirtualRound(league.id, timeItem.time, roundIndex);
         
         matchesForRound.forEach((m) => {
-          // Keep all future matches with date set to selectedDate so they pass selection filters
           m.date = selectedDate;
           
-          // Update status and live score depending on hour index (index)
           if (index < 4) {
             // Completed session (Past)
             m.matchStatus = 'FT';
-            m.predictions.status = m.finalScoreHome! > m.finalScoreAway! ? 'Won' : 'Lost'; // Mock winning status
+            m.predictions.status = m.finalScoreHome! > m.finalScoreAway! ? 'Won' : 'Lost';
           } else if (index === 4) {
-            // Current session (LIVE)
-            if (liveStatus === 'FT') {
-              m.matchStatus = 'FT';
+            // Current session
+            m.matchStatus = currentMatchStatus;
+            if (currentMatchStatus === 'Pending') {
+              m.finalScoreHome = null;
+              m.finalScoreAway = null;
+              m.liveMinute = undefined;
+              m.predictions.status = 'Pending';
+            } else if (currentMatchStatus === 'FT') {
+              m.liveMinute = 90;
               m.predictions.status = m.finalScoreHome! > m.finalScoreAway! ? 'Won' : 'Lost';
             } else {
-              m.matchStatus = 'LIVE';
+              // LIVE
               m.liveMinute = liveMinute;
-              // Simulate real-time score
-              if (liveMinute === 0) {
-                m.finalScoreHome = 0;
-                m.finalScoreAway = 0;
+              if (currentPhase === 'HALF_TIME') {
+                m.finalScoreHome = m.halfTimeScoreHome;
+                m.finalScoreAway = m.halfTimeScoreAway;
               } else {
-                // home scores filtered by live minute
                 const homeGoalsCount = m.goalMinutes.home.filter(g => parseInt(g) <= liveMinute!).length;
                 const awayGoalsCount = m.goalMinutes.away.filter(g => parseInt(g) <= liveMinute!).length;
                 m.finalScoreHome = homeGoalsCount;
                 m.finalScoreAway = awayGoalsCount;
               }
+              m.predictions.status = 'Pending';
             }
           } else {
-            // Future session (Pending)
+            // Future session
             m.matchStatus = 'Pending';
             m.finalScoreHome = null;
             m.finalScoreAway = null;
+            m.liveMinute = undefined;
+            m.predictions.status = 'Pending';
           }
           
           results.push(m);
@@ -236,7 +262,7 @@ export default function App() {
     });
     
     return results;
-  }, [currentCycleIndex, secondsRemaining, currentVirtualTimes, selectedDate]);
+  }, [currentCycleIndex, cycleSeconds, currentVirtualTimes, selectedDate]);
 
   const [leagues, setLeagues] = useState<League[]>(() => {
     const saved = localStorage.getItem('sourspark_leagues');
@@ -307,6 +333,40 @@ export default function App() {
   const [selectedLeagueTab, setSelectedLeagueTab] = useState<'results' | 'matches' | 'standings'>('matches');
   const [selectedHourIndex, setSelectedHourIndex] = useState<number>(4);
   const [activeBetFilter, setActiveBetFilter] = useState<string>('1X2');
+
+  // Auto-switch betting market in real-time based on cycleSeconds!
+  useEffect(() => {
+    if (cycleSeconds < 120) {
+      // Countdown phase
+      const step = Math.floor(cycleSeconds / 24);
+      if (step === 0) setActiveBetFilter('1X2');
+      else if (step === 1) setActiveBetFilter('DOUBLE CHANCE');
+      else if (step === 2) setActiveBetFilter('OVER/UNDER');
+      else if (step === 3) setActiveBetFilter('BTTS');
+      else setActiveBetFilter('CORRECT SCORE');
+    } else if (cycleSeconds < 145) {
+      // First Half phase
+      const elapsed = cycleSeconds - 120;
+      if (elapsed < 8) setActiveBetFilter('MI-TPS 1X2');
+      else if (elapsed < 16) setActiveBetFilter('MI-TPS DC');
+      else setActiveBetFilter('MI-TPS SCORE');
+    } else if (cycleSeconds < 150) {
+      // Half Time phase
+      setActiveBetFilter('HALF TIME');
+    } else if (cycleSeconds < 175) {
+      // Second Half phase
+      const elapsed = cycleSeconds - 150;
+      if (elapsed < 8) setActiveBetFilter('2ND HALF 1X2');
+      else if (elapsed < 16) setActiveBetFilter('2ND HALF DC');
+      else setActiveBetFilter('2ND HALF SCORE');
+    } else {
+      // Full Time phase
+      const elapsed = cycleSeconds - 175;
+      if (elapsed < 5) setActiveBetFilter('FINAL 1X2');
+      else if (elapsed < 10) setActiveBetFilter('FINAL SCORE');
+      else setActiveBetFilter('ALL FINAL');
+    }
+  }, [cycleSeconds]);
   const [selectedSimulationMatch, setSelectedSimulationMatch] = useState<Match | null>(null);
   const [currentTimeTick, setCurrentTimeTick] = useState<number>(0);
 
@@ -333,7 +393,7 @@ export default function App() {
   const [favLeague, setFavLeague] = useState<string>('eng');
 
   // Bet slip / cart state
-  const [betSlip, setBetSlip] = useState<{ matchId: string; choice: '1' | 'X' | '2'; odds: number }[]>([]);
+  const [betSlip, setBetSlip] = useState<{ matchId: string; choice: string; odds: number }[]>([]);
   const [stake, setStake] = useState<number>(5000);
   const [isBetSlipOpen, setIsBetSlipOpen] = useState<boolean>(false);
   const [betslipTab, setBetslipTab] = useState<'selections' | 'history'>('selections');
@@ -714,17 +774,24 @@ export default function App() {
     setNotifications([]);
   };
 
-  // Bet slip action: click an odd on a match card
-  const handleBetClick = (matchId: string, choice: '1' | 'X' | '2') => {
+  // Bet slip action: click an odd on a match card or betting board
+  const handleBetClick = (matchId: string, choice: string, odds?: number) => {
     const matchObj = matches.find((m) => m.id === matchId);
     if (!matchObj) return;
 
-    const oddsVal =
-      choice === '1'
-        ? matchObj.odds.homeWin
-        : choice === 'X'
-        ? matchObj.odds.draw
-        : matchObj.odds.awayWin;
+    let finalOdds = odds;
+    if (finalOdds === undefined) {
+      if (choice === '1') {
+        finalOdds = matchObj.odds.homeWin;
+      } else if (choice === '2') {
+        finalOdds = matchObj.odds.awayWin;
+      } else if (choice === 'X') {
+        finalOdds = matchObj.odds.draw;
+      } else {
+        const firstOpt = getMarketOptionsForFilter(matchObj, activeBetFilter).find(o => o.choice === choice);
+        finalOdds = firstOpt ? firstOpt.odd : 1.80;
+      }
+    }
 
     setBetSlip((prev) => {
       const existingIdx = prev.findIndex((item) => item.matchId === matchId);
@@ -734,11 +801,11 @@ export default function App() {
           return prev.filter((item) => item.matchId !== matchId);
         } else {
           const updated = [...prev];
-          updated[existingIdx] = { matchId, choice, odds: oddsVal };
+          updated[existingIdx] = { matchId, choice, odds: finalOdds! };
           return updated;
         }
       } else {
-        return [...prev, { matchId, choice, odds: oddsVal }];
+        return [...prev, { matchId, choice, odds: finalOdds! }];
       }
     });
     setIsBetSlipOpen(true);
@@ -855,6 +922,83 @@ export default function App() {
     }, 1500);
   };
 
+  const getMarketOptionsForFilter = (m: Match, filter: string) => {
+    const norm = filter.toUpperCase().trim();
+    
+    // Fallback double chance calculations
+    const dc1X = parseFloat((1.0 / (1.0/m.odds.homeWin + 1.0/m.odds.draw) * 0.9).toFixed(2));
+    const dc12 = parseFloat((1.0 / (1.0/m.odds.homeWin + 1.0/m.odds.awayWin) * 0.9).toFixed(2));
+    const dcX2 = parseFloat((1.0 / (1.0/m.odds.draw + 1.0/m.odds.awayWin) * 0.9).toFixed(2));
+
+    // Fallback btts/overUnder
+    const overOdds = m.predictions.overUnder25 === 'Over' ? m.predictions.overUnderOdds : parseFloat((m.predictions.overUnderOdds * 0.85).toFixed(2));
+    const underOdds = m.predictions.overUnder25 === 'Under' ? m.predictions.overUnderOdds : parseFloat((m.predictions.overUnderOdds * 0.85).toFixed(2));
+    
+    const ouiOdds = m.predictions.btts === 'Yes' ? m.predictions.bttsOdds : parseFloat((m.predictions.bttsOdds * 0.85).toFixed(2));
+    const nonOdds = m.predictions.btts === 'No' ? m.predictions.bttsOdds : parseFloat((m.predictions.bttsOdds * 0.85).toFixed(2));
+
+    const predScore = getPredictedScore(m);
+
+    if (norm === '1X2' || norm === 'FINAL 1X2' || norm === 'ALL FINAL') {
+      return [
+        { label: '1', odd: m.odds.homeWin, choice: '1' },
+        { label: 'X', odd: m.odds.draw, choice: 'X' },
+        { label: '2', odd: m.odds.awayWin, choice: '2' },
+      ];
+    }
+    if (norm === 'DOUBLE CHANCE' || norm === '2ND HALF DC' || norm === 'MI-TPS DC') {
+      return [
+        { label: '1X', odd: dc1X, choice: '1X' },
+        { label: '12', odd: dc12, choice: '12' },
+        { label: 'X2', odd: dcX2, choice: 'X2' },
+      ];
+    }
+    if (norm === 'OVER/UNDER') {
+      return [
+        { label: 'Over 2.5', odd: overOdds, choice: 'Over 2.5' },
+        { label: 'Under 2.5', odd: underOdds, choice: 'Under 2.5' },
+      ];
+    }
+    if (norm === 'BTTS') {
+      return [
+        { label: 'Oui', odd: ouiOdds, choice: 'Oui' },
+        { label: 'Non', odd: nonOdds, choice: 'Non' },
+      ];
+    }
+    if (norm === 'CORRECT SCORE' || norm === 'FINAL SCORE' || norm === 'HT SCORE' || norm === '2ND HALF SCORE' || norm === 'MI-TPS SCORE') {
+      const parts = predScore.split('-');
+      const hSc = parseInt(parts[0]) || 0;
+      const aSc = parseInt(parts[1]) || 0;
+      const oddScore = parseFloat((6.5 + (m.predictions.exactScorePct || 10) / 3).toFixed(2));
+      const altScore1 = hSc > aSc ? `${hSc}-${aSc + 1}` : hSc === aSc ? `${hSc + 1}-${aSc}` : `${hSc + 1}-${aSc}`;
+      const altOdd1 = parseFloat((oddScore * 1.25).toFixed(2));
+      return [
+        { label: predScore, odd: oddScore, choice: predScore },
+        { label: altScore1, odd: altOdd1, choice: altScore1 },
+      ];
+    }
+    if (norm === 'MI-TPS 1X2' || norm === 'HALF TIME') {
+      return [
+        { label: 'HT 1', odd: parseFloat((m.odds.homeWin * 0.85 + 0.3).toFixed(2)), choice: 'HT 1' },
+        { label: 'HT X', odd: parseFloat((m.odds.draw * 0.85).toFixed(2)), choice: 'HT X' },
+        { label: 'HT 2', odd: parseFloat((m.odds.awayWin * 0.85 + 0.3).toFixed(2)), choice: 'HT 2' },
+      ];
+    }
+    if (norm === '2ND HALF 1X2') {
+      return [
+        { label: '2H 1', odd: parseFloat((m.odds.homeWin * 0.9).toFixed(2)), choice: '2H 1' },
+        { label: '2H X', odd: parseFloat((m.odds.draw * 0.9).toFixed(2)), choice: '2H X' },
+        { label: '2H 2', odd: parseFloat((m.odds.awayWin * 0.9).toFixed(2)), choice: '2H 2' },
+      ];
+    }
+    
+    return [
+      { label: '1', odd: m.odds.homeWin, choice: '1' },
+      { label: 'X', odd: m.odds.draw, choice: 'X' },
+      { label: '2', odd: m.odds.awayWin, choice: '2' },
+    ];
+  };
+
   // Helper to filter matches dynamically across all screens
   const displayedMatches = useMemo(() => {
     return matches.filter((match) => {
@@ -889,13 +1033,82 @@ export default function App() {
     let updatedUsers = [...users];
     let isUserUpdated = false;
 
+    const isSelectionWinning = (choice: string, m: Match): boolean => {
+      const h = m.finalScoreHome !== null ? m.finalScoreHome : m.goalMinutes.home.length;
+      const a = m.finalScoreAway !== null ? m.finalScoreAway : m.goalMinutes.away.length;
+      const hHT = m.halfTimeScoreHome !== null ? m.halfTimeScoreHome : m.goalMinutes.home.filter(g => parseInt(g) <= 45).length;
+      const aHT = m.halfTimeScoreAway !== null ? m.halfTimeScoreAway : m.goalMinutes.away.filter(g => parseInt(g) <= 45).length;
+      
+      const h2H = h - hHT;
+      const a2H = a - aHT;
+      
+      const formattedChoice = choice.toUpperCase().trim();
+      
+      // --- 1X2 MARKETS ---
+      if (formattedChoice === '1') return h > a;
+      if (formattedChoice === 'X') return h === a;
+      if (formattedChoice === '2') return h < a;
+      
+      // --- DOUBLE CHANCE MARKETS ---
+      if (formattedChoice === '1X') return h >= a;
+      if (formattedChoice === '12') return h !== a;
+      if (formattedChoice === 'X2') return h <= a;
+      
+      // --- OVER / UNDER MARKETS ---
+      if (formattedChoice === 'OVER 0.5') return (h + a) > 0.5;
+      if (formattedChoice === 'UNDER 0.5') return (h + a) < 0.5;
+      if (formattedChoice === 'OVER 1.5') return (h + a) > 1.5;
+      if (formattedChoice === 'UNDER 1.5') return (h + a) < 1.5;
+      if (formattedChoice === 'OVER 2.5') return (h + a) > 2.5;
+      if (formattedChoice === 'UNDER 2.5') return (h + a) < 2.5;
+      if (formattedChoice === 'OVER 3.5') return (h + a) > 3.5;
+      if (formattedChoice === 'UNDER 3.5') return (h + a) < 3.5;
+      
+      // --- BTTS MARKETS ---
+      if (formattedChoice === 'OUI') return h > 0 && a > 0;
+      if (formattedChoice === 'NON') return h === 0 || a === 0;
+      
+      // --- CORRECT SCORE MARKETS ---
+      if (formattedChoice === `${h}-${a}` || formattedChoice === `${h} - ${a}`) return true;
+      
+      // --- FIRST HALF MARKETS ---
+      if (formattedChoice === 'HT 1') return hHT > aHT;
+      if (formattedChoice === 'HT X') return hHT === aHT;
+      if (formattedChoice === 'HT 2') return hHT < aHT;
+      
+      if (formattedChoice === 'HT 1X') return hHT >= aHT;
+      if (formattedChoice === 'HT 12') return hHT !== aHT;
+      if (formattedChoice === 'HT X2') return hHT <= aHT;
+      
+      if (formattedChoice === 'HT OUI') return hHT > 0 && aHT > 0;
+      if (formattedChoice === 'HT NON') return hHT === 0 || aHT === 0;
+      
+      if (formattedChoice === `HT ${hHT}-${aHT}` || formattedChoice === `HT ${hHT} - ${aHT}`) return true;
+      
+      // --- SECOND HALF MARKETS ---
+      if (formattedChoice === '2H 1') return h2H > a2H;
+      if (formattedChoice === '2H X') return h2H === a2H;
+      if (formattedChoice === '2H 2') return h2H < a2H;
+      
+      if (formattedChoice === '2H 1X') return h2H >= a2H;
+      if (formattedChoice === '2H 12') return h2H !== a2H;
+      if (formattedChoice === '2H X2') return h2H <= a2H;
+      
+      if (formattedChoice === '2H OUI') return h2H > 0 && a2H > 0;
+      if (formattedChoice === '2H NON') return h2H === 0 || a2H === 0;
+      
+      if (formattedChoice === `2H ${h2H}-${a2H}` || formattedChoice === `2H ${h2H} - ${a2H}`) return true;
+      
+      return false;
+    };
+
     // We can settle a bet if the round is completed.
     // The match is completed if currentCycleIndex > bet.roundIndex
-    // OR if currentCycleIndex === bet.roundIndex && secondsRemaining <= 20 (FT result phase!)
+    // OR if currentCycleIndex === bet.roundIndex && cycleSeconds >= 175 (FT results are final!)
     for (let i = updatedActiveBets.length - 1; i >= 0; i--) {
       const bet = updatedActiveBets[i];
       const isRoundFinished = currentCycleIndex > bet.roundIndex || 
-        (currentCycleIndex === bet.roundIndex && secondsRemaining <= 20);
+        (currentCycleIndex === bet.roundIndex && cycleSeconds >= 175);
 
       if (isRoundFinished) {
         // Evaluate all selections
@@ -905,19 +1118,14 @@ export default function App() {
         for (const sel of bet.selections) {
           // Look up the exact match from our computed matches
           const matchObj = matches.find(m => m.id === sel.matchId);
-          if (matchObj && (matchObj.matchStatus === 'FT' || matchObj.finalScoreHome !== null)) {
-            const h = matchObj.finalScoreHome!;
-            const a = matchObj.finalScoreAway!;
-            const outcome = h > a ? '1' : h === a ? 'X' : '2';
-
-            if (sel.choice === outcome) {
+          if (matchObj) {
+            if (isSelectionWinning(sel.choice, matchObj)) {
               // Selection won
             } else {
               anyLost = true;
               allWon = false;
             }
           } else {
-            // Match not generated or not finished yet
             allWon = false;
           }
         }
@@ -1449,8 +1657,40 @@ export default function App() {
                             : selectedHourIndex;
 
                           const selectedTimeItem = currentVirtualTimes[hourIndex];
-                          const simulatedStatus = hourIndex < 4 ? 'FT' : hourIndex === 4 ? 'LIVE' : 'Pending';
-                          const liveMinuteVal = hourIndex === 4 ? 62 : undefined;
+                          
+                          // Determine synchronized simulated status based on active cycle seconds and selected hour index
+                          let simulatedStatus: 'Pending' | 'LIVE' | 'FT' = 'Pending';
+                          let liveMinuteVal: number | string | undefined = undefined;
+
+                          if (hourIndex < 4) {
+                            simulatedStatus = 'FT';
+                            liveMinuteVal = 90;
+                          } else if (hourIndex > 4) {
+                            simulatedStatus = 'Pending';
+                            liveMinuteVal = undefined;
+                          } else {
+                            // hourIndex === 4 (the current round)
+                            if (cycleSeconds < 120) {
+                              simulatedStatus = 'Pending';
+                              liveMinuteVal = undefined;
+                            } else if (cycleSeconds < 145) {
+                              simulatedStatus = 'LIVE';
+                              const step = Math.min(Math.floor(((cycleSeconds - 120) / 25) * 10), 9);
+                              const firstHalfMinutes = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45];
+                              liveMinuteVal = firstHalfMinutes[step];
+                            } else if (cycleSeconds < 150) {
+                              simulatedStatus = 'LIVE';
+                              liveMinuteVal = 'HT';
+                            } else if (cycleSeconds < 175) {
+                              simulatedStatus = 'LIVE';
+                              const step = Math.min(Math.floor(((cycleSeconds - 150) / 25) * 10), 9);
+                              const secondHalfMinutes = [46, 50, 55, 60, 65, 70, 75, 80, 85, 90];
+                              liveMinuteVal = secondHalfMinutes[step];
+                            } else {
+                              simulatedStatus = 'FT';
+                              liveMinuteVal = 90;
+                            }
+                          }
 
                           let leagueMatches = matches.filter(m => m.leagueId === league.id && m.matchTime === selectedTimeItem.time);
 
@@ -1541,19 +1781,21 @@ export default function App() {
 
                                 {/* 4. Match Prediction Filter buttons */}
                                 <div className="px-3 py-2 bg-white flex gap-1 overflow-x-auto scrollbar-none select-none border-b border-gray-100">
-                                  {['1X2', 'MI-TPS 1X2', 'DOUBLE CHANCE', 'MI-TPS DC', '+ 29 DE PLUS v'].map((filter) => {
-                                    const is1X2 = filter === '1X2';
+                                  {['1X2', 'DOUBLE CHANCE', 'OVER/UNDER', 'BTTS', 'CORRECT SCORE', '+ 29 DE PLUS v'].map((filter) => {
+                                    const isActive = activeBetFilter === filter;
                                     return (
                                       <button
                                         key={filter}
                                         onClick={() => {
                                           if (filter === '+ 29 DE PLUS v') {
                                             alert("Plus de 29 marchés de paris supplémentaires débloqués en exclusivité !");
+                                          } else {
+                                            setActiveBetFilter(filter);
                                           }
                                         }}
                                         className={`px-3 py-1 text-[8px] font-black uppercase tracking-wider rounded-full border whitespace-nowrap transition-all ${
-                                          is1X2
-                                            ? 'bg-[#2E7D32] border-[#2E7D32] text-white'
+                                          isActive
+                                            ? 'bg-[#2E7D32] border-[#2E7D32] text-white font-extrabold'
                                             : 'bg-white border-gray-200 text-gray-500 hover:text-gray-800'
                                         }`}
                                       >
@@ -1567,12 +1809,37 @@ export default function App() {
                                 <div className="bg-gray-50 border-b border-gray-100 px-3 py-1 flex items-center justify-between text-[8px] font-black text-gray-400 uppercase tracking-wider select-none">
                                   <div className="w-[38%]">MATCHS DU JOUR</div>
                                   <div className="w-[45%] text-center flex justify-around">
-                                    <span className="w-8">1</span>
-                                    <span className="w-8">X</span>
-                                    <span className="w-8">2</span>
+                                    {activeBetFilter === 'DOUBLE CHANCE' ? (
+                                      <>
+                                        <span className="w-8">1X</span>
+                                        <span className="w-8">12</span>
+                                        <span className="w-8">X2</span>
+                                      </>
+                                    ) : activeBetFilter === 'OVER/UNDER' ? (
+                                      <>
+                                        <span className="w-12">+2.5</span>
+                                        <span className="w-12">-2.5</span>
+                                      </>
+                                    ) : activeBetFilter === 'BTTS' ? (
+                                      <>
+                                        <span className="w-10">OUI</span>
+                                        <span className="w-10">NON</span>
+                                      </>
+                                    ) : activeBetFilter === 'CORRECT SCORE' ? (
+                                      <>
+                                        <span className="w-12">PRÉDI</span>
+                                        <span className="w-12">ALT</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <span className="w-8">1</span>
+                                        <span className="w-8">X</span>
+                                        <span className="w-8">2</span>
+                                      </>
+                                    )}
                                   </div>
                                   <div className="w-[17%] text-right flex items-center justify-end gap-0.5">
-                                    <span>SCORE EXACT PRÉDIT</span>
+                                    <span>SCORE PRÉDIT</span>
                                     <HelpCircle className="h-2.5 w-2.5" />
                                   </div>
                                 </div>
@@ -1584,20 +1851,8 @@ export default function App() {
                                     simulatedMatch.matchTime = selectedTimeItem?.time || m.matchTime;
                                     simulatedMatch.matchStatus = simulatedStatus;
 
-                                    if (simulatedStatus === 'FT') {
-                                      const predScore = getPredictedScore(m);
-                                      const [hSc, aSc] = predScore.split('-').map(Number);
-                                      simulatedMatch.finalScoreHome = hSc;
-                                      simulatedMatch.finalScoreAway = aSc;
-                                    } else if (simulatedStatus === 'LIVE') {
-                                      simulatedMatch.liveMinute = liveMinuteVal;
-                                      const predScore = getPredictedScore(m);
-                                      const [hSc, aSc] = predScore.split('-').map(Number);
-                                      simulatedMatch.finalScoreHome = Math.max(0, hSc - 1);
-                                      simulatedMatch.finalScoreAway = Math.max(0, aSc - 1);
-                                    } else {
-                                      simulatedMatch.finalScoreHome = null;
-                                      simulatedMatch.finalScoreAway = null;
+                                    if (simulatedStatus === 'LIVE') {
+                                      simulatedMatch.liveMinute = typeof liveMinuteVal === 'number' ? liveMinuteVal : undefined;
                                     }
 
                                     const flagA = getTeamFlagAndColors(m.homeTeam).flag || '⚽';
@@ -1617,7 +1872,8 @@ export default function App() {
                                           <button
                                             onClick={(e) => {
                                               e.stopPropagation();
-                                              handleBetClick(m.id, m.predictions.singleTip as any);
+                                              const firstOpt = getMarketOptionsForFilter(m, activeBetFilter)[0];
+                                              handleBetClick(m.id, firstOpt.choice, firstOpt.odd);
                                             }}
                                             className="text-gray-300 hover:text-amber-500 transition-colors text-xs"
                                           >
@@ -1647,48 +1903,41 @@ export default function App() {
                                               )}
                                             </div>
                                             <span className="text-[8px] font-bold font-mono text-gray-450 mt-0.5">
-                                              🕒 {simulatedMatch.matchTime}
+                                              🕒 {simulatedMatch.matchTime} {simulatedStatus === 'LIVE' && `• LIVE ${typeof liveMinuteVal === 'number' ? `${liveMinuteVal}'` : liveMinuteVal}`}
                                             </span>
                                           </div>
                                         </div>
 
-                                        {/* 1X2 Prediction cells */}
-                                        <div className="w-[45%] flex items-center gap-1 justify-around">
-                                          {/* Option 1 */}
-                                          <div
-                                            className={`w-11 h-9 flex flex-col items-center justify-center rounded-lg border text-center transition-all ${
-                                              m.predictions.singleTip === '1'
-                                                ? 'bg-[#E8F5E9] border-[#4CAF50] text-[#2E7D32] font-extrabold'
-                                                : 'bg-white border-gray-150 text-gray-450'
-                                            }`}
-                                          >
-                                            <span className="text-[8px] uppercase font-bold leading-none">1</span>
-                                            <span className="text-[9px] font-black mt-0.5 leading-none">{m.predictions.homeWinPct}%</span>
-                                          </div>
+                                        {/* Dynamic Prediction cells */}
+                                        <div className="w-[45%] flex items-center gap-1.5 justify-around">
+                                          {getMarketOptionsForFilter(m, activeBetFilter).map((opt) => {
+                                            const isSelected = betSlip.some((b) => b.matchId === m.id && b.choice === opt.choice);
+                                            const isLocked = simulatedStatus !== 'Pending';
 
-                                          {/* Option X */}
-                                          <div
-                                            className={`w-11 h-9 flex flex-col items-center justify-center rounded-lg border text-center transition-all ${
-                                              m.predictions.singleTip === 'X'
-                                                ? 'bg-[#F5F5F5] border-[#D0D0D0] text-[#616161] font-extrabold'
-                                                : 'bg-white border-gray-150 text-gray-450'
-                                            }`}
-                                          >
-                                            <span className="text-[8px] uppercase font-bold leading-none">X</span>
-                                            <span className="text-[9px] font-black mt-0.5 leading-none">{m.predictions.drawPct}%</span>
-                                          </div>
-
-                                          {/* Option 2 */}
-                                          <div
-                                            className={`w-11 h-9 flex flex-col items-center justify-center rounded-lg border text-center transition-all ${
-                                              m.predictions.singleTip === '2'
-                                                ? 'bg-[#4CAF50] border-[#4CAF50] text-white font-extrabold'
-                                                : 'bg-white border-gray-150 text-gray-450'
-                                            }`}
-                                          >
-                                            <span className="text-[8px] uppercase font-bold leading-none">2</span>
-                                            <span className="text-[9px] font-black mt-0.5 leading-none">{m.predictions.awayWinPct}%</span>
-                                          </div>
+                                            return (
+                                              <button
+                                                key={opt.choice}
+                                                disabled={isLocked}
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  if (isLocked) return;
+                                                  handleBetClick(m.id, opt.choice, opt.odd);
+                                                }}
+                                                className={`flex-1 h-9 flex flex-col items-center justify-center rounded-lg border text-center transition-all px-1 select-none ${
+                                                  isSelected
+                                                    ? 'bg-[#E8F5E9] border-[#4CAF50] text-[#2E7D32] font-black shadow-sm scale-102'
+                                                    : isLocked
+                                                    ? 'bg-gray-100 border-gray-150 text-gray-450 cursor-not-allowed opacity-75'
+                                                    : 'bg-white border-gray-150 hover:bg-gray-50 text-gray-700'
+                                                }`}
+                                              >
+                                                <span className="text-[7px] uppercase font-bold leading-none">{opt.label}</span>
+                                                <span className="text-[9px] font-black mt-0.5 leading-none">
+                                                  {isLocked ? '🔒' : opt.odd.toFixed(2)}
+                                                </span>
+                                              </button>
+                                            );
+                                          })}
                                         </div>
 
                                         {/* Exact Score Predicted box */}
