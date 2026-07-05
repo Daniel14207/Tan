@@ -11,7 +11,7 @@ import { ParsedMatch } from '../types';
 export function getTeamFlagAndColors(teamName: string): { flag: string; isNational: boolean } {
   const name = (teamName || '').toLowerCase().trim();
 
-  // Flag map for national selections (French & English names)
+  // Flag map for national selections (French & English names) & famous clubs
   const flagMap: { [key: string]: string } = {
     'france': '🇫🇷', 'maroc': '🇲🇦', 'morocco': '🇲🇦', 'soudan': '🇸🇩', 'sudan': '🇸🇩',
     'ouganda': '🇺🇬', 'uganda': '🇺🇬', 'mozambique': '🇲🇿', 'nigeria': '🇳🇬', 'nigéria': '🇳🇬',
@@ -33,6 +33,25 @@ export function getTeamFlagAndColors(teamName: string): { flag: string; isNation
     'japon': '🇯🇵', 'japan': '🇯🇵', 'corée': '🇰🇷', 'korea': '🇰🇷', 'togo': '🇹🇬',
     'guinee': '🇬🇳', 'guinea': '🇬🇳', 'cap-vert': '🇨🇻', 'cape verde': '🇨🇻',
     'mauritanie': '🇲🇷', 'mauritania': '🇲🇷', 'libye': '🇱🇾', 'libya': '🇱🇾',
+    // European & domestic clubs mapping
+    'real madrid': '👑', 'bayern munich': '🔴⚪', 'bayern': '🔴⚪', 'man city': '🩵',
+    'manchester city': '🩵', 'psg': '🔵🔴', 'paris saint-germain': '🔵🔴', 'paris sg': '🔵🔴',
+    'arsenal': '🔴', 'inter milan': '🔵⚫', 'inter': '🔵⚫', 'barcelona': '🔵🔴',
+    'barcelone': '🔵🔴', 'napoli': '🔵', 'naples': '🔵', 'manchester united': '👹',
+    'man united': '👹', 'chelsea': '🔵', 'liverpool': '🔴', 'tottenham': '🐓',
+    'newcastle': '⚪⚫', 'aston villa': '🦁', 'brighton': '🔵⚪', 'atletico madrid': '🔴⚪',
+    'atlético madrid': '🔴⚪', 'sevilla': '⚪🔴', 'seville': '⚪🔴', 'real sociedad': '🔵⚪',
+    'villarreal': '🟡', 'real betis': '🟢⚪', 'valencia': '🦇', 'valence': '🦇',
+    'juventus': '⚪⚫', 'ac milan': '🔴⚫', 'milan': '🔴⚫', 'as roma': '🐺',
+    'roma': '🐺', 'lazio': '🦅', 'atalanta': '🔵⚫', 'fiorentina': '🟣',
+    'dortmund': '🟡⚫', 'borussia dortmund': '🟡⚫', 'rb leipzig': '🐂', 'leipzig': '🐂',
+    'bayer leverkusen': '🔴⚫', 'leverkusen': '🔴⚫', 'eintracht frankfurt': '🦅',
+    'frankfurt': '🦅', 'union berlin': '🔴⚪', 'freiburg': '🦅', 'fribourg': '🦅',
+    'vfb stuttgart': '🔴⚪', 'stuttgart': '🔴⚪', 'lyon': '🔵🔴⚪', 'lille': '🔴🔵',
+    'monaco': '🔴⚪', 'nice': '🔴⚫', 'rennes': '🔴⚫', 'nantes': '🟡🟢',
+    'porto': '🔵⚪', 'benfica': '🦅', 'sporting cp': '🦁🟢', 'sporting': '🦁🟢',
+    'braga': '🔴⚪', 'vitoria guimaraes': '⚪⚫', 'famalicao': '🔵', 'boavista': '🏁',
+    'rio ave': '🟢⚪'
   };
 
   // Check direct names

@@ -42,6 +42,10 @@ export interface Match {
     isBest: boolean;
     isFree: boolean;
     status: 'Pending' | 'Won' | 'Lost';
+    homeWinPct?: number;
+    drawPct?: number;
+    awayWinPct?: number;
+    exactScorePct?: number;
   };
 }
 

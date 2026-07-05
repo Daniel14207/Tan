@@ -11,9 +11,10 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Match, League, NotificationItem, UserAccount, PaymentRequest, LiveSignal, ChatMessage, BalanceLog } from './types';
 import { MATCHES_DATABASE, LEAGUES_LIST, NOTIFICATIONS_DATABASE } from './data/matchDatabase';
+import { generateVirtualRound } from './data/virtualEngine';
 import Navbar from './components/Navbar';
 import DateSelector from './components/DateSelector';
-import MatchCard from './components/MatchCard';
+import MatchCard, { getPredictedScore } from './components/MatchCard';
 import VipModal from './components/VipModal';
 import NotificationPanel from './components/NotificationPanel';
 import SupportChat from './components/SupportChat';
@@ -71,6 +72,7 @@ export default function App() {
         passwordHash: '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8', // "password"
         isVip: true,
         isSuspended: false,
+        soldeLiveTop: 100000,
         createdAt: '28/06/2026'
       },
       {
@@ -81,6 +83,7 @@ export default function App() {
         passwordHash: '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8', // "password"
         isVip: false,
         isSuspended: false,
+        soldeLiveTop: 100000,
         createdAt: '29/06/2026'
       }
     ];
@@ -108,12 +111,132 @@ export default function App() {
   });
 
   // --- MATCHES AND LEAGUES DYNAMIC DATABASE ---
-  const [matches, setMatches] = useState<Match[]>(() => {
-    const saved = localStorage.getItem('sourspark_matches');
-    if (saved) return JSON.parse(saved);
-    localStorage.setItem('sourspark_matches', JSON.stringify(MATCHES_DATABASE));
-    return MATCHES_DATABASE;
+  const [matchesState, setMatchesState] = useState<Match[]>([]);
+  const [, setMatches] = useState<Match[]>([]); // Keeps other setMatches references fully compatible
+
+  // --- VIRTUAL SPORTSBOOK ENGINE STATES ---
+  const [secondsRemaining, setSecondsRemaining] = useState<number>(() => {
+    const secondsIntoCycle = Math.floor((Date.now() / 1000) % 120);
+    return 120 - secondsIntoCycle;
   });
+
+  const currentCycleIndex = Math.floor(Date.now() / 120000);
+  const [selectedDate, setSelectedDate] = useState<string>('2026-06-30');
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const secondsIntoCycle = Math.floor((Date.now() / 1000) % 120);
+      setSecondsRemaining(120 - secondsIntoCycle);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const [activeBets, setActiveBets] = useState<any[]>(() => {
+    const saved = localStorage.getItem('sourspark_active_bets');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [settledBets, setSettledBets] = useState<any[]>(() => {
+    const saved = localStorage.getItem('sourspark_settled_bets');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  // Generate virtual timetable of 9 hours (spaced by 2 minutes) around current time
+  const currentVirtualTimes = useMemo(() => {
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    
+    // Align to closest even minute
+    const activeMinutes = currentMinutes % 2 === 0 ? currentMinutes : currentMinutes - 1;
+    
+    const times = [];
+    for (let offset = -8; offset <= 8; offset += 2) {
+      const min = activeMinutes + offset;
+      const h = Math.floor((min + 1440) % 1440 / 60);
+      const m = (min + 1440) % 1440 % 60;
+      const formatted = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      times.push({
+        time: formatted,
+        isActive: offset === 0,
+        isPast: offset < 0,
+        isFuture: offset > 0
+      });
+    }
+    return times;
+  }, [currentCycleIndex]);
+
+  // Infinite dynamic virtual matches list
+  const matches = useMemo(() => {
+    const results: Match[] = [];
+    const secondsIntoCycle = 120 - secondsRemaining;
+    
+    // Determine live status variables
+    // First 15 seconds: pre-match (score 0-0, live minute is 'Pre-match')
+    // Next 85 seconds: live match (minute counts from 1 to 90)
+    // Last 20 seconds: completed full-time (score is final, status is FT)
+    let liveStatus: 'Pending' | 'LIVE' | 'FT' = 'LIVE';
+    let liveMinute: number | undefined = undefined;
+    
+    if (secondsIntoCycle < 15) {
+      liveStatus = 'LIVE';
+      liveMinute = 0; // Pre-match intro
+    } else if (secondsIntoCycle < 100) {
+      liveStatus = 'LIVE';
+      // Map 15..100 seconds to 1..90 minutes
+      const progress = (secondsIntoCycle - 15) / 85;
+      liveMinute = Math.min(90, Math.max(1, Math.floor(progress * 90)));
+    } else {
+      liveStatus = 'FT'; // Settle results in last 20 seconds
+    }
+
+    LEAGUES_LIST.forEach((league) => {
+      currentVirtualTimes.forEach((timeItem, index) => {
+        const roundIndex = currentCycleIndex + (index - 4);
+        const matchesForRound = generateVirtualRound(league.id, timeItem.time, roundIndex);
+        
+        matchesForRound.forEach((m) => {
+          // Keep all future matches with date set to selectedDate so they pass selection filters
+          m.date = selectedDate;
+          
+          // Update status and live score depending on hour index (index)
+          if (index < 4) {
+            // Completed session (Past)
+            m.matchStatus = 'FT';
+            m.predictions.status = m.finalScoreHome! > m.finalScoreAway! ? 'Won' : 'Lost'; // Mock winning status
+          } else if (index === 4) {
+            // Current session (LIVE)
+            if (liveStatus === 'FT') {
+              m.matchStatus = 'FT';
+              m.predictions.status = m.finalScoreHome! > m.finalScoreAway! ? 'Won' : 'Lost';
+            } else {
+              m.matchStatus = 'LIVE';
+              m.liveMinute = liveMinute;
+              // Simulate real-time score
+              if (liveMinute === 0) {
+                m.finalScoreHome = 0;
+                m.finalScoreAway = 0;
+              } else {
+                // home scores filtered by live minute
+                const homeGoalsCount = m.goalMinutes.home.filter(g => parseInt(g) <= liveMinute!).length;
+                const awayGoalsCount = m.goalMinutes.away.filter(g => parseInt(g) <= liveMinute!).length;
+                m.finalScoreHome = homeGoalsCount;
+                m.finalScoreAway = awayGoalsCount;
+              }
+            }
+          } else {
+            // Future session (Pending)
+            m.matchStatus = 'Pending';
+            m.finalScoreHome = null;
+            m.finalScoreAway = null;
+          }
+          
+          results.push(m);
+        });
+      });
+    });
+    
+    return results;
+  }, [currentCycleIndex, secondsRemaining, currentVirtualTimes, selectedDate]);
 
   const [leagues, setLeagues] = useState<League[]>(() => {
     const saved = localStorage.getItem('sourspark_leagues');
@@ -178,12 +301,13 @@ export default function App() {
   // Navigation state
   // "home" | "free" | "best" | "live" | "vip" | "htft" | "more" | "live-scores" | "live-tips" | "single" | "btts" | "overunder" | "terms" | "privacy" | "profile" | "live-top" | "admin"
   const [activeView, setActiveView] = useState<string>('home');
-  const [selectedDate, setSelectedDate] = useState<string>('2026-06-30');
   const [selectedLeagueId, setSelectedLeagueId] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   const [selectedLeagueTab, setSelectedLeagueTab] = useState<'results' | 'matches' | 'standings'>('matches');
   const [selectedHourIndex, setSelectedHourIndex] = useState<number>(4);
+  const [activeBetFilter, setActiveBetFilter] = useState<string>('1X2');
+  const [selectedSimulationMatch, setSelectedSimulationMatch] = useState<Match | null>(null);
   const [currentTimeTick, setCurrentTimeTick] = useState<number>(0);
 
   // Auto-refresh virtual times list
@@ -200,6 +324,8 @@ export default function App() {
     setSelectedHourIndex(4);
   }, [selectedLeagueId]);
   
+  const [leagueHourIndices, setLeagueHourIndices] = useState<Record<string, number>>({});
+  
   // Onboarding state
   const [showOnboarding, setShowOnboarding] = useState<boolean>(() => {
     return !localStorage.getItem('onboarding_completed');
@@ -208,8 +334,9 @@ export default function App() {
 
   // Bet slip / cart state
   const [betSlip, setBetSlip] = useState<{ matchId: string; choice: '1' | 'X' | '2'; odds: number }[]>([]);
-  const [stake, setStake] = useState<number>(10);
+  const [stake, setStake] = useState<number>(5000);
   const [isBetSlipOpen, setIsBetSlipOpen] = useState<boolean>(false);
+  const [betslipTab, setBetslipTab] = useState<'selections' | 'history'>('selections');
 
   // VIP Subscription status calculated dynamically from user database
   const isVipSubscribed = useMemo(() => {
@@ -621,13 +748,71 @@ export default function App() {
     setBetSlip((prev) => prev.filter((item) => item.matchId !== matchId));
   };
 
+  const handlePlaceBet = () => {
+    if (!currentUser) {
+      alert("Veuillez vous connecter pour placer un pari.");
+      return;
+    }
+
+    const currentBalance = currentUser.soldeLiveTop || 0;
+    if (currentBalance < stake) {
+      alert(`Solde insuffisant ! Votre solde actuel est de ${currentBalance.toLocaleString('fr-FR')} Ar. Veuillez recharger votre solde Live TOP via le menu VIP.`);
+      return;
+    }
+
+    // Deduct stake and update databases
+    const updatedUsers = users.map((u) => {
+      if (u.userId === currentUser.userId) {
+        return {
+          ...u,
+          soldeLiveTop: (u.soldeLiveTop || 0) - stake,
+        };
+      }
+      return u;
+    });
+
+    const newBet = {
+      id: `bet-${Date.now()}`,
+      roundIndex: currentCycleIndex,
+      selections: betSlip.map((item) => {
+        const m = matches.find((matchObj) => matchObj.id === item.matchId)!;
+        return {
+          matchId: item.matchId,
+          choice: item.choice,
+          odds: item.odds,
+          homeTeam: m.homeTeam,
+          awayTeam: m.awayTeam,
+        };
+      }),
+      stake,
+      totalOdds,
+      potentialWin,
+      status: 'Pending',
+      placedAt: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    const updatedActiveBets = [newBet, ...activeBets];
+    setActiveBets(updatedActiveBets);
+    localStorage.setItem('sourspark_active_bets', JSON.stringify(updatedActiveBets));
+
+    setUsers(updatedUsers);
+    localStorage.setItem('sourspark_users', JSON.stringify(updatedUsers));
+
+    const updatedCurrentUser = updatedUsers.find((u) => u.userId === currentUser.userId)!;
+    setCurrentUser(updatedCurrentUser);
+    localStorage.setItem('sourspark_current_user', JSON.stringify(updatedCurrentUser));
+
+    setBetSlip([]);
+    alert(`🎉 Pari placé avec succès ! ${stake.toLocaleString('fr-FR')} Ar déduits de votre solde.`);
+  };
+
   // Computed potential payout for bet slip
   const totalOdds = useMemo(() => {
     if (betSlip.length === 0) return 0;
     return betSlip.reduce((acc, item) => acc * item.odds, 1);
   }, [betSlip]);
 
-  const potentialWin = (totalOdds * stake).toFixed(2);
+  const potentialWin = Math.round(totalOdds * stake);
 
   // Send Support Message & automated intelligent answers
   const handleSendMessage = (text: string) => {
@@ -694,29 +879,98 @@ export default function App() {
     });
   }, [selectedDate, selectedLeagueId, searchQuery]);
 
-  // Generate virtual timetable of 9 hours (spaced by 2 minutes) around current time
-  const currentVirtualTimes = useMemo(() => {
-    const now = new Date();
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    
-    // Align to closest even minute
-    const activeMinutes = currentMinutes % 2 === 0 ? currentMinutes : currentMinutes - 1;
-    
-    const times = [];
-    for (let offset = -8; offset <= 8; offset += 2) {
-      const min = activeMinutes + offset;
-      const h = Math.floor((min + 1440) % 1440 / 60);
-      const m = (min + 1440) % 1440 % 60;
-      const formatted = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-      times.push({
-        time: formatted,
-        isActive: offset === 0,
-        isPast: offset < 0,
-        isFuture: offset > 0
-      });
+  // --- AUTOMATIC BET SETTLEMENT SYSTEM ---
+  useEffect(() => {
+    if (activeBets.length === 0) return;
+
+    let hasChanges = false;
+    const updatedActiveBets = [...activeBets];
+    const newSettledBets = [...settledBets];
+    let updatedUsers = [...users];
+    let isUserUpdated = false;
+
+    // We can settle a bet if the round is completed.
+    // The match is completed if currentCycleIndex > bet.roundIndex
+    // OR if currentCycleIndex === bet.roundIndex && secondsRemaining <= 20 (FT result phase!)
+    for (let i = updatedActiveBets.length - 1; i >= 0; i--) {
+      const bet = updatedActiveBets[i];
+      const isRoundFinished = currentCycleIndex > bet.roundIndex || 
+        (currentCycleIndex === bet.roundIndex && secondsRemaining <= 20);
+
+      if (isRoundFinished) {
+        // Evaluate all selections
+        let allWon = true;
+        let anyLost = false;
+
+        for (const sel of bet.selections) {
+          // Look up the exact match from our computed matches
+          const matchObj = matches.find(m => m.id === sel.matchId);
+          if (matchObj && (matchObj.matchStatus === 'FT' || matchObj.finalScoreHome !== null)) {
+            const h = matchObj.finalScoreHome!;
+            const a = matchObj.finalScoreAway!;
+            const outcome = h > a ? '1' : h === a ? 'X' : '2';
+
+            if (sel.choice === outcome) {
+              // Selection won
+            } else {
+              anyLost = true;
+              allWon = false;
+            }
+          } else {
+            // Match not generated or not finished yet
+            allWon = false;
+          }
+        }
+
+        if (allWon || anyLost) {
+          // Settle the bet!
+          const status = allWon ? 'Won' : 'Lost';
+          const settledBet = {
+            ...bet,
+            status,
+            settledAt: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+          };
+
+          // Remove from active, add to settled
+          updatedActiveBets.splice(i, 1);
+          newSettledBets.unshift(settledBet);
+          hasChanges = true;
+
+          // If won, credit the balance!
+          if (status === 'Won' && currentUser) {
+            const winAmount = Math.round(bet.potentialWin);
+            updatedUsers = updatedUsers.map(u => {
+              if (u.userId === currentUser.userId) {
+                isUserUpdated = true;
+                return {
+                  ...u,
+                  soldeLiveTop: (u.soldeLiveTop || 0) + winAmount
+                };
+              }
+              return u;
+            });
+          }
+        }
+      }
     }
-    return times;
-  }, [currentTimeTick]);
+
+    if (hasChanges) {
+      setActiveBets(updatedActiveBets);
+      setSettledBets(newSettledBets);
+      localStorage.setItem('sourspark_active_bets', JSON.stringify(updatedActiveBets));
+      localStorage.setItem('sourspark_settled_bets', JSON.stringify(newSettledBets));
+
+      if (isUserUpdated) {
+        setUsers(updatedUsers);
+        localStorage.setItem('sourspark_users', JSON.stringify(updatedUsers));
+        // Update currentUser reference
+        const updatedCurrentUser = updatedUsers.find(u => u.userId === currentUser?.userId);
+        if (updatedCurrentUser) {
+          localStorage.setItem('sourspark_current_user', JSON.stringify(updatedCurrentUser));
+        }
+      }
+    }
+  }, [currentCycleIndex, secondsRemaining, matches, currentUser, users, activeBets, settledBets]);
 
   // Dynamic standings calculation
   const standings = useMemo(() => {
@@ -880,8 +1134,10 @@ export default function App() {
     );
   }
 
+  const isWideDashboard = activeView === 'home' && selectedLeagueId === 'all';
+
   return (
-    <div className="mx-auto min-h-screen max-w-md premium-soccer-bg shadow-2xl flex flex-col relative font-sans">
+    <div className={`mx-auto min-h-screen ${isWideDashboard ? 'max-w-7xl w-full px-4 md:px-8' : 'max-w-md w-full'} bg-[#F3F4F6] shadow-2xl flex flex-col relative font-sans transition-all duration-300`}>
       
       {/* ONBOARDING FLOW PANEL */}
       {showOnboarding && (
@@ -929,7 +1185,7 @@ export default function App() {
             <button
               id="btn-onboarding-start"
               onClick={handleCompleteOnboarding}
-              className="w-full rounded-2xl bg-[#1A237E] hover:bg-indigo-900 py-4 text-sm font-black text-white transition-colors uppercase tracking-wider shadow-md"
+              className="w-full rounded-2xl bg-[#0B5D34] hover:bg-[#074b29] py-4 text-sm font-black text-white transition-colors uppercase tracking-wider shadow-md"
             >
               COMMENCER LE VOYAGE
             </button>
@@ -945,6 +1201,7 @@ export default function App() {
         title={viewTitle}
         cartCount={cartCount}
         notificationCount={unreadNotificationCount}
+        secondsRemaining={secondsRemaining}
         onMenuClick={() => setActiveView('more')}
         onCartClick={() => setIsBetSlipOpen((prev) => !prev)}
         onNotificationClick={() => setIsNotificationsOpen((prev) => !prev)}
@@ -983,322 +1240,650 @@ export default function App() {
             {/* SEARCH STRIP */}
             {['home', 'free', 'best', 'vip'].includes(activeView) && (
               <div className="relative mb-4">
-                <Search className="absolute top-3.5 left-4 h-4 w-4 text-slate-400" />
+                <Search className="absolute top-3.5 left-4 h-4 w-4 text-gray-400" />
                 <input
                   id="main-search-input"
                   type="text"
                   placeholder="Rechercher des équipes, ligues..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-white text-slate-800 rounded-2xl py-3 pl-11 pr-4 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200/80 shadow-sm placeholder-slate-400"
+                  className="w-full bg-white text-gray-800 rounded-2xl py-3 pl-11 pr-4 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 border border-gray-200 shadow-sm placeholder-gray-450 font-sans font-bold"
                 />
               </div>
             )}
 
             {/* 1. HOME SCREEN */}
             {activeView === 'home' && (
-              <div className="space-y-4">
-                {/* Featured competition banner at top of Dashboard */}
-                <div className="rounded-3xl bg-white text-slate-800 p-5 border border-slate-100 shadow-sm">
-                  <div className="flex justify-between items-start mb-3">
-                    <span className="rounded-full bg-indigo-50 px-3 py-1 text-[10px] font-bold text-indigo-600 uppercase tracking-wider">
-                      Conseil Vedette
-                    </span>
-                    <span className="text-[10px] text-slate-400 font-mono font-medium">
-                      Cote Elevée AI
-                    </span>
+              <div className="space-y-6">
+                {/* Sportsbook Header Banner / Universal Title Banner from screenshot */}
+                {selectedLeagueId === 'all' && (
+                  <div className="text-center py-6 select-none bg-white border border-gray-200 rounded-3xl p-6 shadow-sm mb-4">
+                    <h1 className="text-xl md:text-2xl.5 font-black text-gray-900 tracking-tight uppercase font-display">
+                      STRUCTURE POUR TOUTES LES COMPÉTITIONS
+                    </h1>
+                    <p className="text-xs md:text-sm text-gray-550 mt-1.5 font-medium">
+                      Le même design et la même structure sont utilisés pour toutes les compétitions.
+                    </p>
+                    <p className="text-[11px] text-gray-450 mt-0.5">
+                      La seule différence est le nom de la compétition.
+                    </p>
                   </div>
-                  <h3 className="text-base font-extrabold text-slate-900">
-                    Arsenal vs Chelsea
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Nos modèles prévoient une domination d'Arsenal à domicile. BTTS est également très probable.
-                  </p>
-                  <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
-                    <span className="text-xs text-slate-500 font-semibold">Prediction: Victoire Arsenal (1)</span>
-                    <span className="text-xs font-bold text-indigo-600">Cote: 1.85</span>
-                  </div>
-                </div>
+                )}
 
-                {/* Horizontal list of competition filters */}
+                {/* Sportsbook Header Banner (Original feature banner) shown if a specific league is filtered */}
+                {selectedLeagueId !== 'all' && (
+                  <div className="rounded-3xl bg-gradient-to-br from-[#004D2C] to-[#0A3720] p-5 border border-emerald-800 shadow-lg relative overflow-hidden select-none text-white">
+                    <div className="absolute top-0 right-0 p-12 bg-emerald-500/5 rounded-full blur-2xl pointer-events-none" />
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 text-[9px] font-black text-emerald-400 uppercase tracking-widest">
+                        🔥 IA CONSEIL VEDETTE
+                      </span>
+                      <span className="text-[9px] text-emerald-300 font-mono font-bold uppercase tracking-wider">
+                        COTE SÉLECTIONNÉE
+                      </span>
+                    </div>
+                    <h3 className="text-xs font-black text-white uppercase tracking-wide">
+                      🏆 Arsenal vs Chelsea
+                    </h3>
+                    <p className="text-[10px] text-emerald-100 mt-1 leading-relaxed">
+                      Nos algorithmes prévoient une nette domination d'Arsenal à domicile. L'option <strong className="text-emerald-400 font-bold">1X2 : Victoire d'Arsenal (1)</strong> offre une excellente valeur.
+                    </p>
+                    <div className="mt-3 flex items-center justify-between border-t border-[#095730] pt-2.5 text-[10px]">
+                      <span className="text-emerald-200 font-bold">Pronostic: <strong className="text-white uppercase">1 (Victoire Arsenal)</strong></span>
+                      <span className="font-mono font-black text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">Cote: 1.85</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Horizontally scrollable League Navigation Tabs */}
                 <div>
-                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-400 mb-2 px-1">
-                    Compétitions Majeures
+                  <h4 className="text-[9px] font-black uppercase tracking-widest text-gray-400 mb-2 px-1">
+                    Ligues Majeures Virtuelles
                   </h4>
-                  <div className="flex gap-2 overflow-x-auto scrollbar-none pb-1">
+                  <div className="flex gap-1.5 overflow-x-auto scrollbar-none pb-1 pt-1">
                     <button
                       id="btn-league-filter-all"
                       onClick={() => setSelectedLeagueId('all')}
-                      className={`px-4 py-2 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all border ${
+                      className={`px-3.5 py-2 rounded-xl text-xs font-black whitespace-nowrap transition-all border flex items-center gap-1.5 ${
                         selectedLeagueId === 'all'
-                          ? 'bg-blue-600 text-white border-blue-600'
-                          : 'bg-white text-slate-600 border-slate-200/80 hover:bg-slate-100'
+                          ? 'bg-[#004D2C] border-[#004D2C] text-white font-extrabold shadow-md'
+                          : 'bg-white text-gray-600 border-gray-200 hover:text-gray-900 hover:bg-gray-50'
                       }`}
                     >
-                      🌍 Toutes
+                      🌍 Toutes les Ligues
                     </button>
                     {LEAGUES_LIST.map((league) => (
                       <button
                         id={`btn-league-filter-${league.id}`}
                         key={league.id}
                         onClick={() => setSelectedLeagueId(league.id)}
-                        className={`px-4 py-2 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all border flex items-center gap-1.5 ${
+                        className={`px-3.5 py-2 rounded-xl text-xs font-black whitespace-nowrap transition-all border flex items-center gap-1.5 ${
                           selectedLeagueId === league.id
-                            ? 'bg-blue-600 text-white border-blue-600'
-                            : 'bg-white text-slate-600 border-slate-200/80 hover:bg-slate-100'
+                            ? 'bg-[#004D2C] border-[#004D2C] text-white font-extrabold shadow-md'
+                            : 'bg-white text-gray-600 border-gray-200 hover:text-gray-900 hover:bg-gray-50'
                         }`}
                       >
-                        <span>{league.logo}</span>
+                        <span className="text-sm select-none">{league.logo}</span>
                         <span>{league.name}</span>
                       </button>
                     ))}
                   </div>
                 </div>
 
-                {/* Match Lists */}
-                {selectedLeagueId !== 'all' ? (
-                  /* PREMIUM DETAILED VIRTUAL LEAGUE SYSTEM */
-                  <div className="space-y-4">
-                    {/* BARRE SUPÉRIEURE (Tabs: Résultats, Matchs, Classement) */}
-                    <div className="flex bg-white rounded-2xl p-1 border border-slate-200/80 shadow-[0_2px_12px_rgba(0,0,0,0.02)]">
-                      {(['results', 'matches', 'standings'] as const).map((tab) => {
-                        const labels = {
-                          results: '🏆 Résultats',
-                          matches: '⚽ Matchs',
-                          standings: '📊 Classement'
-                        };
-                        const isActive = selectedLeagueTab === tab;
-                        return (
-                          <button
-                            key={tab}
-                            id={`btn-league-tab-${tab}`}
-                            onClick={() => setSelectedLeagueTab(tab)}
-                            className={`flex-1 text-center py-2.5 text-xs font-black rounded-xl transition-all uppercase tracking-wider ${
-                              isActive
-                                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
-                                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
-                            }`}
-                          >
-                            {labels[tab]}
-                          </button>
-                        );
-                      })}
-                    </div>
+                {/* Competition Details tabs (Results, Matches, Standings) shown only for specific leagues */}
+                {selectedLeagueId !== 'all' && (
+                  <div className="flex bg-white rounded-2xl border border-gray-200 overflow-hidden shadow">
+                    {(['results', 'matches', 'standings'] as const).map((tab) => {
+                      const labels = {
+                        results: '🏆 RÉSULTATS',
+                        matches: '⚽ MATCHS',
+                        standings: '📊 CLASSEMENT'
+                      };
+                      const isActive = selectedLeagueTab === tab;
+                      return (
+                        <button
+                          key={tab}
+                          id={`btn-league-tab-${tab}`}
+                          onClick={() => setSelectedLeagueTab(tab)}
+                          className={`flex-1 text-center py-3 text-[10px] font-black transition-all tracking-wider border-b-2 ${
+                            isActive
+                              ? 'border-[#004D2C] text-[#004D2C] bg-emerald-50/20'
+                              : 'border-transparent text-gray-500 hover:text-gray-800'
+                          }`}
+                        >
+                          {labels[tab]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
 
-                    {/* BARRE DES HORAIRES (Timetable) - only if tab is 'matches' */}
-                    {selectedLeagueTab === 'matches' && (
-                      <div className="space-y-2">
-                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block px-1">
-                          Heures Virtuelles (Journées de Match)
-                        </span>
-                        
-                        <div className="flex gap-2 overflow-x-auto scrollbar-none pb-2 pt-1 px-1">
-                          {currentVirtualTimes.map((item, index) => {
-                            const isSelected = selectedHourIndex === index;
+                {/* Render central betting panel if it is All Leagues or active Matches Tab */}
+                {(selectedLeagueId === 'all' || selectedLeagueTab === 'matches') ? (
+                  <div className="space-y-6">
+                    {selectedLeagueId !== 'all' && (
+                      <>
+                        {/* Virtual Hour Selector (Always visible on the dashboard for single league view) */}
+                        <div className="space-y-2 bg-white p-3.5 rounded-2xl border border-gray-200">
+                          <span className="text-[9px] font-black uppercase tracking-widest text-gray-400 block px-1">
+                            🕒 Heures Virtuelles & Sessions actives
+                          </span>
+                          <div className="flex gap-2 overflow-x-auto scrollbar-none pb-1 pt-1 px-1">
+                            {currentVirtualTimes.map((item, index) => {
+                              const isSelected = selectedHourIndex === index;
+                              const isLive = index === 4;
+                              return (
+                                <button
+                                  key={index}
+                                  id={`btn-hour-pill-${index}`}
+                                  onClick={() => setSelectedHourIndex(index)}
+                                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black whitespace-nowrap transition-all border flex flex-col items-center justify-center gap-0.5 min-w-[70px] ${
+                                    isSelected
+                                      ? 'bg-red-500 border-red-500 text-white font-extrabold shadow-md'
+                                      : isLive
+                                      ? 'bg-red-500/10 border-red-500/30 text-red-500 hover:bg-red-500/20'
+                                      : 'bg-white border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-50'
+                                  }`}
+                                >
+                                  <span className="font-mono">{item.time}</span>
+                                  {isLive ? (
+                                    <span className="text-[7px] uppercase font-black tracking-wide leading-none select-none">
+                                      🔴 LIVE
+                                    </span>
+                                  ) : index < 4 ? (
+                                    <span className="text-[7px] text-gray-400 uppercase font-black tracking-wide leading-none select-none">
+                                      Terminé
+                                    </span>
+                                  ) : (
+                                    <span className="text-[7px] text-gray-400 uppercase font-black tracking-wide leading-none select-none">
+                                      À venir
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* PRONOSTIC BETTING FILTERS BAR (For single league) */}
+                        <div className="flex gap-1.5 overflow-x-auto scrollbar-none pb-1">
+                          {['1X2', 'MI-TPS 1X2', 'DOUBLE CHANCE', 'MI-TPS DC', '+ 29 DE PLUS v'].map((filter) => {
+                            const isActive = activeBetFilter === filter || (filter === '+ 29 DE PLUS v' && activeBetFilter === 'plus');
                             return (
                               <button
-                                key={index}
-                                id={`btn-hour-pill-${index}`}
-                                onClick={() => setSelectedHourIndex(index)}
-                                className={`px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all border flex items-center gap-1.5 shadow-sm ${
-                                  item.isActive
-                                    ? 'bg-rose-500 border-rose-500 text-white shadow-md shadow-rose-500/20' // Active hour is in RED!
-                                    : isSelected
-                                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50/80'
+                                key={filter}
+                                id={`btn-bet-filter-${filter}`}
+                                onClick={() => {
+                                  if (filter === '+ 29 DE PLUS v') {
+                                    setActiveBetFilter('plus');
+                                    alert("Plus de 29 marchés de paris supplémentaires débloqués en exclusivité !");
+                                  } else {
+                                    setActiveBetFilter(filter);
+                                  }
+                                }}
+                                className={`px-3 py-1.5 text-[9px] font-black uppercase tracking-wider rounded-xl border whitespace-nowrap transition-all ${
+                                  isActive
+                                    ? 'bg-[#004D2C] border-[#004D2C] text-white'
+                                    : 'bg-white border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-50'
                                 }`}
                               >
-                                {item.isActive && (
-                                  <span className="relative flex h-2 w-2">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
-                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
-                                  </span>
-                                )}
-                                <span className={item.isActive ? "font-black" : "font-semibold"}>{item.time}</span>
+                                {filter}
                               </button>
                             );
                           })}
                         </div>
-                      </div>
+                      </>
                     )}
 
-                    {/* CONTENT DISPLAY BASED ON ACTIVE TAB */}
-                    {selectedLeagueTab === 'matches' && (
-                      <div className="space-y-3">
-                        {(() => {
-                          // Get all matches for this league
-                          const leagueMatches = matches.filter(m => m.leagueId === selectedLeagueId);
-                          
-                          // Determine the rounds/days available
-                          const rounds = Array.from(new Set(leagueMatches.map(m => m.round))).sort();
-                          
-                          if (rounds.length === 0) {
-                            return (
-                              <div className="text-center py-12 text-slate-400 bg-white rounded-3xl border border-slate-100 p-6 shadow-sm">
-                                <HelpCircle className="h-8 w-8 mx-auto opacity-30 mb-2" />
-                                <p className="text-xs font-bold">Aucun match trouvé pour cette compétition</p>
-                              </div>
+                    {/* MATCH SECTIONS CONTAINER */}
+                    <div className={selectedLeagueId === 'all' ? "grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-2 gap-6" : "space-y-4"}>
+                      {(() => {
+                        const activeLeagues = selectedLeagueId === 'all'
+                          ? LEAGUES_LIST
+                          : LEAGUES_LIST.filter(l => l.id === selectedLeagueId);
+
+                        return activeLeagues.map((league) => {
+                          // Get the hour index for this league
+                          const hourIndex = selectedLeagueId === 'all'
+                            ? (leagueHourIndices[league.id] !== undefined ? leagueHourIndices[league.id] : 8) // Default to index 8 (13:04 red highlighted active button in screenshot)
+                            : selectedHourIndex;
+
+                          const selectedTimeItem = currentVirtualTimes[hourIndex];
+                          const simulatedStatus = hourIndex < 4 ? 'FT' : hourIndex === 4 ? 'LIVE' : 'Pending';
+                          const liveMinuteVal = hourIndex === 4 ? 62 : undefined;
+
+                          let leagueMatches = matches.filter(m => m.leagueId === league.id && m.matchTime === selectedTimeItem.time);
+
+                          if (searchQuery) {
+                            const query = searchQuery.toLowerCase();
+                            leagueMatches = leagueMatches.filter(m => 
+                              m.homeTeam.toLowerCase().includes(query) ||
+                              m.awayTeam.toLowerCase().includes(query)
                             );
                           }
 
-                          // Map selectedHourIndex (0-8) to available rounds
-                          const roundIndex = Math.min(Math.floor(selectedHourIndex / 3), rounds.length - 1);
-                          const activeRound = rounds[roundIndex];
+                          if (leagueMatches.length === 0) {
+                            return null;
+                          }
+
+                          // Header colors mapping from screenshots
+                          const headerColors: Record<string, string> = {
+                            can: 'bg-[#004D2C]', // Dark green
+                            ucl: 'bg-[#0B1E36]', // Dark blue
+                            eng: 'bg-[#3D195B]', // Purple
+                            esp: 'bg-[#0F4C81]', // Blue
+                            ita: 'bg-[#0D3B66]', // Navy
+                            ger: 'bg-[#A6192E]', // Red
+                            fra: 'bg-[#1A365D]', // Royal Blue
+                            por: 'bg-[#005A5B]', // Teal
+                          };
                           
-                          // Filter matches for this round
-                          const roundMatches = leagueMatches.filter(m => m.round === activeRound);
-                          
-                          // Decide if we should render them as Live or Pending or FT based on the timetable
-                          const selectedTimeItem = currentVirtualTimes[selectedHourIndex];
+                          const leagueThemeColor = headerColors[league.id] || 'bg-[#004D2C]';
 
                           return (
-                            <div className="space-y-3">
-                              <div className="flex justify-between items-center px-1">
-                                <span className="text-xs font-extrabold text-indigo-950 uppercase tracking-wide">
-                                  {activeRound}
-                                </span>
-                                <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-100 px-2.5 py-1 rounded-xl">
-                                  Session: {selectedTimeItem?.time}
-                                </span>
+                            <div key={league.id} id={`league-section-${league.id}`} className="bg-white rounded-3xl overflow-hidden border border-gray-200 shadow-sm flex flex-col justify-between">
+                              <div>
+                                {/* 1. Header Band with custom league color */}
+                                <div className={`${leagueThemeColor} py-3.5 px-4 text-white font-black flex justify-between items-center select-none shadow-sm`}>
+                                  <span className="text-xs font-black tracking-wider uppercase flex items-center gap-2">
+                                    <span className="h-6 w-6 rounded-full bg-white/10 flex items-center justify-center text-xs">🏆</span>
+                                    <span>{league.name}</span>
+                                  </span>
+                                  <span className="text-[9px] text-white/90 font-mono font-bold bg-white/15 px-2 py-0.5 rounded border border-white/10">
+                                    {leagueMatches.length} MATCHS
+                                  </span>
+                                </div>
+
+                                {/* 2. Sub-Tabs */}
+                                <div className="flex border-b border-gray-100 bg-gray-50/50">
+                                  {['RÉSULTATS', 'MATCHS', 'CLASSEMENT'].map((t) => {
+                                    const isMatchTab = t === 'MATCHS';
+                                    return (
+                                      <div
+                                        key={t}
+                                        className={`flex-1 text-center py-2.5 text-[9px] font-black tracking-wider border-b-3 transition-colors ${
+                                          isMatchTab
+                                            ? `border-[#004D2C] text-[#004D2C] font-extrabold`
+                                            : 'border-transparent text-gray-400'
+                                        }`}
+                                      >
+                                        {t}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+
+                                {/* 3. Independent Hours selector */}
+                                <div className="p-3 bg-white border-b border-gray-100 overflow-x-auto scrollbar-none flex gap-1.5 select-none justify-between">
+                                  {currentVirtualTimes.map((item, index) => {
+                                    const isSelected = hourIndex === index;
+                                    return (
+                                      <button
+                                        key={index}
+                                        onClick={() => {
+                                          if (selectedLeagueId === 'all') {
+                                            setLeagueHourIndices(prev => ({ ...prev, [league.id]: index }));
+                                          } else {
+                                            setSelectedHourIndex(index);
+                                          }
+                                        }}
+                                        className={`px-2 py-1.5 rounded-lg text-[10px] font-extrabold whitespace-nowrap transition-all border font-mono ${
+                                          isSelected
+                                            ? 'bg-[#D32F2F] border-[#D32F2F] text-white shadow-sm'
+                                            : 'bg-white border-gray-200 text-gray-500 hover:text-gray-800'
+                                        }`}
+                                      >
+                                        {item.time}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+
+                                {/* 4. Match Prediction Filter buttons */}
+                                <div className="px-3 py-2 bg-white flex gap-1 overflow-x-auto scrollbar-none select-none border-b border-gray-100">
+                                  {['1X2', 'MI-TPS 1X2', 'DOUBLE CHANCE', 'MI-TPS DC', '+ 29 DE PLUS v'].map((filter) => {
+                                    const is1X2 = filter === '1X2';
+                                    return (
+                                      <button
+                                        key={filter}
+                                        onClick={() => {
+                                          if (filter === '+ 29 DE PLUS v') {
+                                            alert("Plus de 29 marchés de paris supplémentaires débloqués en exclusivité !");
+                                          }
+                                        }}
+                                        className={`px-3 py-1 text-[8px] font-black uppercase tracking-wider rounded-full border whitespace-nowrap transition-all ${
+                                          is1X2
+                                            ? 'bg-[#2E7D32] border-[#2E7D32] text-white'
+                                            : 'bg-white border-gray-200 text-gray-500 hover:text-gray-800'
+                                        }`}
+                                      >
+                                        {filter}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+
+                                {/* 5. Sub-header label banner */}
+                                <div className="bg-gray-50 border-b border-gray-100 px-3 py-1 flex items-center justify-between text-[8px] font-black text-gray-400 uppercase tracking-wider select-none">
+                                  <div className="w-[38%]">MATCHS DU JOUR</div>
+                                  <div className="w-[45%] text-center flex justify-around">
+                                    <span className="w-8">1</span>
+                                    <span className="w-8">X</span>
+                                    <span className="w-8">2</span>
+                                  </div>
+                                  <div className="w-[17%] text-right flex items-center justify-end gap-0.5">
+                                    <span>SCORE EXACT PRÉDIT</span>
+                                    <HelpCircle className="h-2.5 w-2.5" />
+                                  </div>
+                                </div>
+
+                                {/* 6. Match Rows List */}
+                                <div className="divide-y divide-gray-100 bg-white">
+                                  {leagueMatches.map((m) => {
+                                    const simulatedMatch = { ...m };
+                                    simulatedMatch.matchTime = selectedTimeItem?.time || m.matchTime;
+                                    simulatedMatch.matchStatus = simulatedStatus;
+
+                                    if (simulatedStatus === 'FT') {
+                                      const predScore = getPredictedScore(m);
+                                      const [hSc, aSc] = predScore.split('-').map(Number);
+                                      simulatedMatch.finalScoreHome = hSc;
+                                      simulatedMatch.finalScoreAway = aSc;
+                                    } else if (simulatedStatus === 'LIVE') {
+                                      simulatedMatch.liveMinute = liveMinuteVal;
+                                      const predScore = getPredictedScore(m);
+                                      const [hSc, aSc] = predScore.split('-').map(Number);
+                                      simulatedMatch.finalScoreHome = Math.max(0, hSc - 1);
+                                      simulatedMatch.finalScoreAway = Math.max(0, aSc - 1);
+                                    } else {
+                                      simulatedMatch.finalScoreHome = null;
+                                      simulatedMatch.finalScoreAway = null;
+                                    }
+
+                                    const flagA = getTeamFlagAndColors(m.homeTeam).flag || '⚽';
+                                    const flagB = getTeamFlagAndColors(m.awayTeam).flag || '⚽';
+                                    const predictedScoreStr = getPredictedScore(m);
+
+                                    const isFavorite = betSlip.some((b) => b.matchId === m.id);
+
+                                    return (
+                                      <div
+                                        key={m.id}
+                                        className="p-3 flex items-center justify-between gap-2 hover:bg-gray-50/50 transition-colors cursor-pointer select-none"
+                                        onClick={() => setSelectedSimulationMatch(simulatedMatch)}
+                                      >
+                                        {/* Favorite star & Team Name Column */}
+                                        <div className="w-[38%] min-w-0 flex items-center gap-1.5 pr-1">
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleBetClick(m.id, m.predictions.singleTip as any);
+                                            }}
+                                            className="text-gray-300 hover:text-amber-500 transition-colors text-xs"
+                                          >
+                                            <span className={`text-base ${isFavorite ? 'text-amber-500 font-extrabold' : 'text-gray-350'}`}>★</span>
+                                          </button>
+                                          <div className="flex flex-col gap-0.5 min-w-0">
+                                            <div className="flex items-center gap-1 min-w-0">
+                                              <span className="text-[11px] select-none shrink-0">{flagA}</span>
+                                              <span className="text-[10px] font-bold text-gray-800 uppercase truncate">
+                                                {m.homeTeam}
+                                              </span>
+                                              {simulatedStatus !== 'Pending' && (
+                                                <span className="font-mono font-black text-[10px] text-[#2E7D32] bg-[#E8F5E9] px-1 rounded ml-auto">
+                                                  {simulatedMatch.finalScoreHome ?? 0}
+                                                </span>
+                                              )}
+                                            </div>
+                                            <div className="flex items-center gap-1 min-w-0">
+                                              <span className="text-[11px] select-none shrink-0">{flagB}</span>
+                                              <span className="text-[10px] font-bold text-gray-800 uppercase truncate">
+                                                {m.awayTeam}
+                                              </span>
+                                              {simulatedStatus !== 'Pending' && (
+                                                <span className="font-mono font-black text-[10px] text-[#2E7D32] bg-[#E8F5E9] px-1 rounded ml-auto">
+                                                  {simulatedMatch.finalScoreAway ?? 0}
+                                                </span>
+                                              )}
+                                            </div>
+                                            <span className="text-[8px] font-bold font-mono text-gray-450 mt-0.5">
+                                              🕒 {simulatedMatch.matchTime}
+                                            </span>
+                                          </div>
+                                        </div>
+
+                                        {/* 1X2 Prediction cells */}
+                                        <div className="w-[45%] flex items-center gap-1 justify-around">
+                                          {/* Option 1 */}
+                                          <div
+                                            className={`w-11 h-9 flex flex-col items-center justify-center rounded-lg border text-center transition-all ${
+                                              m.predictions.singleTip === '1'
+                                                ? 'bg-[#E8F5E9] border-[#4CAF50] text-[#2E7D32] font-extrabold'
+                                                : 'bg-white border-gray-150 text-gray-450'
+                                            }`}
+                                          >
+                                            <span className="text-[8px] uppercase font-bold leading-none">1</span>
+                                            <span className="text-[9px] font-black mt-0.5 leading-none">{m.predictions.homeWinPct}%</span>
+                                          </div>
+
+                                          {/* Option X */}
+                                          <div
+                                            className={`w-11 h-9 flex flex-col items-center justify-center rounded-lg border text-center transition-all ${
+                                              m.predictions.singleTip === 'X'
+                                                ? 'bg-[#F5F5F5] border-[#D0D0D0] text-[#616161] font-extrabold'
+                                                : 'bg-white border-gray-150 text-gray-450'
+                                            }`}
+                                          >
+                                            <span className="text-[8px] uppercase font-bold leading-none">X</span>
+                                            <span className="text-[9px] font-black mt-0.5 leading-none">{m.predictions.drawPct}%</span>
+                                          </div>
+
+                                          {/* Option 2 */}
+                                          <div
+                                            className={`w-11 h-9 flex flex-col items-center justify-center rounded-lg border text-center transition-all ${
+                                              m.predictions.singleTip === '2'
+                                                ? 'bg-[#4CAF50] border-[#4CAF50] text-white font-extrabold'
+                                                : 'bg-white border-gray-150 text-gray-450'
+                                            }`}
+                                          >
+                                            <span className="text-[8px] uppercase font-bold leading-none">2</span>
+                                            <span className="text-[9px] font-black mt-0.5 leading-none">{m.predictions.awayWinPct}%</span>
+                                          </div>
+                                        </div>
+
+                                        {/* Exact Score Predicted box */}
+                                        <div className="w-[17%] flex items-center justify-end gap-1">
+                                          <div className="h-9 px-1.5 flex flex-col items-center justify-center bg-white border border-gray-250 rounded-lg text-center">
+                                            <span className="text-[10px] font-mono font-black text-gray-800 leading-none">
+                                              {predictedScoreStr}
+                                            </span>
+                                            <span className="text-[7.5px] font-bold text-gray-450 mt-0.5 leading-none">
+                                              ({m.predictions.exactScorePct}%)
+                                            </span>
+                                          </div>
+                                          <span className="text-gray-300 font-extrabold text-xs select-none">›</span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               </div>
 
-                              {roundMatches.map((m) => {
-                                // Dynamically adjust match status based on if past, current, or future
-                                const simulatedMatch = { ...m };
-                                if (selectedTimeItem?.isActive) {
-                                  simulatedMatch.matchStatus = 'LIVE';
-                                  simulatedMatch.liveMinute = 45;
-                                } else if (selectedTimeItem?.isPast) {
-                                  simulatedMatch.matchStatus = 'FT';
-                                } else {
-                                  simulatedMatch.matchStatus = 'Pending';
-                                  simulatedMatch.finalScoreHome = null;
-                                  simulatedMatch.finalScoreAway = null;
-                                }
-
-                                return (
-                                  <MatchCard
-                                    key={m.id}
-                                    match={simulatedMatch}
-                                    layout="odds"
-                                    onBetClick={handleBetClick}
-                                    selectedBet={betSlip.find((b) => b.matchId === m.id)?.choice}
-                                  />
-                                );
-                              })}
+                              {/* 7. Card Footer Legends block */}
+                              <div className="p-3 bg-gray-50 border-t border-gray-100 text-[8px] font-bold text-gray-500 space-y-2 select-none">
+                                <div className="flex flex-wrap gap-2 justify-between border-b border-gray-150 pb-2">
+                                  <div className="flex items-center gap-1">
+                                    <span className="w-3.5 h-3.5 flex items-center justify-center rounded-md border border-[#4CAF50] bg-[#E8F5E9] text-[#2E7D32] text-[7.5px] font-black">1</span>
+                                    <span>Victoire Home (Probabilité élevée)</span>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <span className="w-3.5 h-3.5 flex items-center justify-center rounded-md border border-[#D0D0D0] bg-[#F5F5F5] text-[#616161] text-[7.5px] font-black">X</span>
+                                    <span>Match Nul (Probabilité moyenne)</span>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <span className="w-3.5 h-3.5 flex items-center justify-center rounded-md border border-[#4CAF50] bg-[#4CAF50] text-white text-[7.5px] font-black">2</span>
+                                    <span>Victoire Away (Probabilité élevée)</span>
+                                  </div>
+                                </div>
+                                <div className="flex items-start gap-1 text-gray-400 leading-relaxed pt-0.5">
+                                  <span className="text-[10px] text-[#2E7D32] shrink-0 font-extrabold">ⓘ</span>
+                                  <p>
+                                    Les prédictions sont basées sur des analyses statistiques et peuvent changer. Jouez de manière responsable.
+                                  </p>
+                                </div>
+                              </div>
                             </div>
                           );
-                        })()}
-                      </div>
-                    )}
+                        });
+                      })()}
+                    </div>
+                  </div>
+                ) : selectedLeagueTab === 'results' ? (
+                  /* Completed Matches list tab */
+                  <div className="space-y-3">
+                    {(() => {
+                      const completedMatches = matches.filter(
+                        (m) => m.leagueId === selectedLeagueId && m.matchStatus === 'FT'
+                      );
 
-                    {selectedLeagueTab === 'results' && (
-                      <div className="space-y-3">
-                        {(() => {
-                          const completedMatches = matches.filter(
-                            (m) => m.leagueId === selectedLeagueId && m.matchStatus === 'FT'
-                          );
+                      if (completedMatches.length === 0) {
+                        return (
+                          <div className="text-center py-12 text-slate-500 bg-[#1A1D24] rounded-3xl border border-slate-800 p-6 shadow-sm">
+                            <Trophy className="h-8 w-8 mx-auto opacity-30 mb-2 text-slate-600" />
+                            <p className="text-xs font-bold text-slate-400">Aucun résultat disponible pour le moment</p>
+                          </div>
+                        );
+                      }
 
-                          if (completedMatches.length === 0) {
-                            return (
-                              <div className="text-center py-12 text-slate-400 bg-white rounded-3xl border border-slate-100 p-6 shadow-sm">
-                                <Trophy className="h-8 w-8 mx-auto opacity-30 mb-2" />
-                                <p className="text-xs font-bold">Aucun résultat disponible pour le moment</p>
-                              </div>
-                            );
-                          }
+                      return (
+                        <div className="space-y-2">
+                          {/* TABLE HEADER BAR FOR RESULTS */}
+                          <div className="bg-[#1A1D24] border border-slate-800 rounded-xl px-3 py-2 flex items-center justify-between text-[9px] font-black text-slate-400 uppercase tracking-wider select-none">
+                            <div className="w-[35%] pl-1">MATCHS TERMINÉS</div>
+                            <div className="w-[45%] text-center">RÉSULTAT DU MATCH</div>
+                            <div className="w-[20%] text-center">SCORE FINAL</div>
+                          </div>
 
-                          return completedMatches.map((m) => (
+                          {completedMatches.map((m) => (
                             <MatchCard
                               key={m.id}
                               match={m}
                               layout="odds"
                               onBetClick={handleBetClick}
                               selectedBet={betSlip.find((b) => b.matchId === m.id)?.choice}
+                              onDetailClick={(matchObj) => setSelectedSimulationMatch(matchObj)}
                             />
-                          ));
-                        })()}
-                      </div>
-                    )}
-
-                    {selectedLeagueTab === 'standings' && (
-                      <div className="bg-white rounded-3xl border border-slate-100/70 shadow-sm p-4 overflow-hidden">
-                        <div className="flex items-center gap-2 mb-4 px-1">
-                          <Trophy className="h-4 w-4 text-indigo-600" />
-                          <h4 className="text-xs font-black text-indigo-950 uppercase tracking-wide">
-                            Classement Général
-                          </h4>
+                          ))}
                         </div>
+                      );
+                    })()}
+                  </div>
+                ) : (
+                  /* Standings tab */
+                  <div className="bg-white rounded-3xl border border-gray-200 shadow-sm p-4 overflow-hidden">
+                    <div className="flex items-center gap-2 mb-4 px-1">
+                      <Trophy className="h-4 w-4 text-[#2E7D32]" />
+                      <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                        Classement Général Officiel
+                      </h4>
+                    </div>
 
-                        {standings.length > 0 ? (
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-left border-collapse">
-                              <thead>
-                                <tr className="border-b border-slate-100 text-[10px] uppercase font-black text-slate-400">
-                                  <th className="py-2.5 pl-2 text-center w-8">#</th>
-                                  <th className="py-2.5">Équipe</th>
-                                  <th className="py-2.5 text-center w-10">MJ</th>
-                                  <th className="py-2.5 text-center w-8">G</th>
-                                  <th className="py-2.5 text-center w-8">N</th>
-                                  <th className="py-2.5 text-center w-8">P</th>
-                                  <th className="py-2.5 text-center pr-2 w-12 text-indigo-600">Pts</th>
+                    {standings.length > 0 ? (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse select-none">
+                          <thead>
+                            <tr className="border-b border-gray-100 text-[10px] uppercase font-black text-slate-500">
+                              <th className="py-2.5 pl-2 text-center w-8">#</th>
+                              <th className="py-2.5">Équipe</th>
+                              <th className="py-2.5 text-center w-10">MJ</th>
+                              <th className="py-2.5 text-center w-8">G</th>
+                              <th className="py-2.5 text-center w-8">N</th>
+                              <th className="py-2.5 text-center w-8">P</th>
+                              <th className="py-2.5 text-center pr-2 w-12 text-[#2E7D32]">Pts</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {standings.map((team, idx) => {
+                              const flagInfo = getTeamFlagAndColors(team.name);
+                              return (
+                                <tr key={team.name} className="hover:bg-gray-50/50 transition-colors text-xs text-slate-600">
+                                  <td className="py-3 text-center font-bold font-mono text-slate-400">
+                                    {idx + 1}
+                                  </td>
+                                  <td className="py-3 font-bold flex items-center gap-2 text-slate-800 font-sans">
+                                    <span className="text-sm select-none filter drop-shadow-sm">{flagInfo.flag}</span>
+                                    <span className="truncate">{team.name}</span>
+                                  </td>
+                                  <td className="py-3 text-center font-semibold text-slate-500">{team.played}</td>
+                                  <td className="py-3 text-center text-slate-500">{team.won}</td>
+                                  <td className="py-3 text-center text-slate-500">{team.drawn}</td>
+                                  <td className="py-3 text-center text-slate-500">{team.lost}</td>
+                                  <td className="py-3 text-center font-black text-[#2E7D32] pr-2">{team.pts}</td>
                                 </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-50">
-                                {standings.map((team, idx) => {
-                                  const flagInfo = getTeamFlagAndColors(team.name);
-                                  return (
-                                    <tr key={team.name} className="hover:bg-slate-50/50 transition-colors text-xs text-slate-700">
-                                      <td className="py-3.5 pl-2 text-center font-bold font-mono text-slate-400">
-                                        {idx + 1}
-                                      </td>
-                                      <td className="py-3.5 font-extrabold flex items-center gap-2 text-slate-900 font-sans">
-                                        <span className="text-base select-none filter drop-shadow-sm">{flagInfo.flag}</span>
-                                        <span className="truncate">{team.name}</span>
-                                      </td>
-                                      <td className="py-3.5 text-center font-semibold text-slate-500">{team.played}</td>
-                                      <td className="py-3.5 text-center text-slate-500">{team.won}</td>
-                                      <td className="py-3.5 text-center text-slate-500">{team.drawn}</td>
-                                      <td className="py-3.5 text-center text-slate-500">{team.lost}</td>
-                                      <td className="py-3.5 text-center font-black text-indigo-600 pr-2">{team.pts}</td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
-                        ) : (
-                          <div className="text-center py-8 text-xs text-slate-400">
-                            Aucune donnée de classement pour le moment.
-                          </div>
-                        )}
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="text-center py-8 text-xs text-slate-400">
+                        Aucune donnée de classement pour le moment.
                       </div>
                     )}
                   </div>
-                ) : (
-                  /* GENERAL HOMEPAGE LISTINGS */
-                  <div>
-                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-400 mb-3 px-1">
-                      Matchs Disponibles ({displayedMatches.length})
-                    </h4>
+                )}
 
-                    {displayedMatches.length > 0 ? (
-                      displayedMatches.map((match) => (
-                        <MatchCard
-                          key={match.id}
-                          match={match}
-                          layout="odds"
-                          onBetClick={handleBetClick}
-                          selectedBet={betSlip.find((b) => b.matchId === match.id)?.choice}
-                        />
-                      ))
-                    ) : (
-                      <div className="text-center py-12 text-slate-400">
-                        <HelpCircle className="h-8 w-8 mx-auto opacity-30 mb-2" />
-                        <p className="text-xs font-bold">Aucun match trouvé pour ce jour</p>
-                        <p className="text-[10px] opacity-70">Essayez de changer de date ou de ligue.</p>
+                {/* 8. Bottom Information Sheets (Double Panel from first screenshot!) */}
+                {selectedLeagueId === 'all' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 border-t border-gray-200 pt-6 select-none">
+                    {/* Left Panel: Principales Fonctionnalités */}
+                    <div className="bg-white border border-gray-200 rounded-3xl p-5 space-y-3 shadow-sm">
+                      <h3 className="text-xs font-black text-gray-900 tracking-wider uppercase border-b border-gray-150 pb-2 flex items-center gap-1.5">
+                        🌟 FONCTIONNALITÉS PRINCIPALES
+                      </h3>
+                      <ul className="space-y-2 text-[10px] font-bold text-gray-600 leading-relaxed">
+                        <li className="flex items-center gap-2">
+                          <span className="text-[#2E7D32] text-xs font-extrabold">✔</span>
+                          <span>Prédictions 1X2 avec pourcentages précis</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <span className="text-[#2E7D32] text-xs font-extrabold">✔</span>
+                          <span>Score exact prédit avec probabilités associées</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <span className="text-[#2E7D32] text-xs font-extrabold">✔</span>
+                          <span>Filtres de paris multiples débloqués en temps réel</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <span className="text-[#2E7D32] text-xs font-extrabold">✔</span>
+                          <span>Mise à jour automatique en temps réel chaque heure</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <span className="text-[#2E7D32] text-xs font-extrabold">✔</span>
+                          <span>Indication du niveau de confiance mathématique</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <span className="text-[#2E7D32] text-xs font-extrabold">✔</span>
+                          <span>Design professionnel cohérent sur toutes compétitions</span>
+                        </li>
+                      </ul>
+                    </div>
+
+                    {/* Right Panel: Structure Universelle */}
+                    <div className="bg-white border border-gray-200 rounded-3xl p-5 space-y-3 shadow-sm">
+                      <h3 className="text-xs font-black text-gray-900 tracking-wider uppercase border-b border-gray-150 pb-2 flex items-center gap-1.5">
+                        ⚽ STRUCTURE UNIVERSELLE
+                      </h3>
+                      <p className="text-[10px] font-semibold text-gray-500 leading-relaxed">
+                        Cette structure est appliquée rigoureusement à TOUTES les compétitions sportives virtuelles prises en charge par l'algorithme Sourspark.
+                      </p>
+                      <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 text-[10px] font-bold text-gray-650 space-y-1.5">
+                        <p>Les matchs sont mis à jour automatiquement chaque heure :</p>
+                        <p className="font-mono text-[#D32F2F] font-black text-xs">
+                          12:48, 12:50, 12:52, 12:54, 12:56, 12:58, 13:00, 13:02, 13:04
+                        </p>
                       </div>
-                    )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -2203,86 +2788,200 @@ export default function App() {
           <div className="flex justify-between items-center border-b border-slate-100 pb-2 mb-3">
             <h3 className="text-xs font-black uppercase tracking-wider text-slate-900 flex items-center gap-1.5">
               <Calculator className="h-4 w-4 text-blue-600" />
-              Billet de Pari ({betSlip.length})
+              Billet de Pari Virtuel
             </h3>
             <button
               id="btn-betslip-close"
               onClick={() => setIsBetSlipOpen(false)}
-              className="text-xs font-bold text-slate-400 hover:text-slate-600"
+              className="text-xs font-bold text-slate-400 hover:text-slate-600 font-sans"
             >
               Fermer
             </button>
           </div>
 
-          {betSlip.length > 0 ? (
-            <div className="space-y-3 max-h-[180px] overflow-y-auto pr-1">
-              {betSlip.map((item) => {
-                const matchObj = matches.find((m) => m.id === item.matchId);
-                if (!matchObj) return null;
-                return (
-                  <div key={item.matchId} className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl text-xs">
-                    <div>
-                      <span className="font-bold text-slate-800 block">
-                        {matchObj.homeTeam} vs {matchObj.awayTeam}
-                      </span>
-                      <span className="text-[10px] text-slate-400 font-medium">
-                        Pari: {item.choice === '1' ? '1 (Dom.)' : item.choice === 'X' ? 'X (Nul)' : '2 (Ext.)'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="font-extrabold text-emerald-600 font-mono">
-                        {item.odds.toFixed(2)}
+          {/* Double-tab header for Selections vs History */}
+          <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl mb-3">
+            <button
+              id="btn-betslip-tab-selections"
+              onClick={() => setBetslipTab('selections')}
+              className={`flex-1 py-1.5 text-[9px] font-black uppercase tracking-wider rounded-lg transition-all ${
+                betslipTab === 'selections' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'
+              }`}
+            >
+              Sélections ({betSlip.length})
+            </button>
+            <button
+              id="btn-betslip-tab-history"
+              onClick={() => setBetslipTab('history')}
+              className={`flex-1 py-1.5 text-[9px] font-black uppercase tracking-wider rounded-lg transition-all ${
+                betslipTab === 'history' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'
+              }`}
+            >
+              Mes Paris ({activeBets.length + settledBets.length})
+            </button>
+          </div>
+
+          {betslipTab === 'selections' ? (
+            /* Tab 1: Selections & Stake Configuration */
+            betSlip.length > 0 ? (
+              <div className="space-y-3">
+                <div className="space-y-2 max-h-[120px] overflow-y-auto pr-1">
+                  {betSlip.map((item) => {
+                    const matchObj = matches.find((m) => m.id === item.matchId);
+                    if (!matchObj) return null;
+                    return (
+                      <div key={item.matchId} className="flex justify-between items-center bg-slate-50 p-2 rounded-xl text-[11px]">
+                        <div className="truncate pr-2">
+                          <span className="font-bold text-slate-800 block truncate">
+                            {matchObj.homeTeam} vs {matchObj.awayTeam}
+                          </span>
+                          <span className="text-[9px] text-slate-400 font-bold uppercase">
+                            Sélection: {item.choice === '1' ? '1 (Victoire Dom.)' : item.choice === 'X' ? 'X (Nul)' : '2 (Victoire Ext.)'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="font-extrabold text-emerald-600 font-mono text-xs">
+                            {item.odds.toFixed(2)}
+                          </span>
+                          <button
+                            id={`btn-betslip-remove-${item.matchId}`}
+                            onClick={() => removeFromBetSlip(item.matchId)}
+                            className="text-red-500 hover:text-red-700"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Stake input field */}
+                <div className="border-t border-slate-100 pt-2 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-slate-700 uppercase tracking-wide">Mise totale:</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        id="btn-stake-minus"
+                        onClick={() => setStake((prev) => Math.max(1000, prev - 1000))}
+                        className="flex h-7 w-7 items-center justify-center rounded bg-slate-100 hover:bg-slate-200 font-bold text-slate-700"
+                      >
+                        <Minus className="h-3.5 w-3.5" />
+                      </button>
+                      <span className="font-bold text-xs text-slate-850 font-mono min-w-[70px] text-center">
+                        {stake.toLocaleString('fr-FR')} Ar
                       </span>
                       <button
-                        id={`btn-betslip-remove-${item.matchId}`}
-                        onClick={() => removeFromBetSlip(item.matchId)}
-                        className="text-red-500 hover:text-red-700"
+                        id="btn-stake-plus"
+                        onClick={() => setStake((prev) => prev + 1000)}
+                        className="flex h-7 w-7 items-center justify-center rounded bg-slate-100 hover:bg-slate-200 font-bold text-slate-700"
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
+                        <Plus className="h-3.5 w-3.5" />
                       </button>
                     </div>
                   </div>
-                );
-              })}
 
-              {/* Stake input field */}
-              <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-3">
-                <span className="text-xs font-bold text-slate-700">Mise:</span>
-                <div className="flex items-center gap-2">
-                  <button
-                    id="btn-stake-minus"
-                    onClick={() => setStake((prev) => Math.max(5, prev - 5))}
-                    className="flex h-7 w-7 items-center justify-center rounded bg-slate-100 font-bold"
-                  >
-                    <Minus className="h-3.5 w-3.5" />
-                  </button>
-                  <span className="font-bold text-xs text-slate-800 w-12 text-center">{stake}€</span>
-                  <button
-                    id="btn-stake-plus"
-                    onClick={() => setStake((prev) => prev + 5)}
-                    className="flex h-7 w-7 items-center justify-center rounded bg-slate-100 font-bold"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </button>
+                  {/* Quick Stake Addition Pills */}
+                  <div className="flex gap-1 justify-end">
+                    {[1000, 5000, 10000].map((amt) => (
+                      <button
+                        key={amt}
+                        id={`btn-quick-stake-${amt}`}
+                        onClick={() => setStake((prev) => prev + amt)}
+                        className="text-[9px] font-black bg-slate-100 hover:bg-slate-200 text-slate-600 px-2.5 py-1 rounded-lg transition-colors"
+                      >
+                        +{amt.toLocaleString('fr-FR')}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
 
-              {/* Total Summary */}
-              <div className="flex justify-between items-center text-xs mt-3 pt-2 border-t border-slate-100">
-                <div>
-                  <span className="text-slate-500 block">Cotes totales:</span>
-                  <span className="font-black text-slate-900 font-mono text-sm">{totalOdds.toFixed(2)}</span>
+                {/* Total Summary */}
+                <div className="flex justify-between items-center text-xs pt-2 border-t border-slate-100">
+                  <div>
+                    <span className="text-slate-400 font-bold uppercase text-[9px] block">Cotes totales:</span>
+                    <span className="font-black text-slate-900 font-mono text-sm">
+                      {totalOdds.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-slate-400 font-bold uppercase text-[9px] block">Gains potentiels:</span>
+                    <span className="font-black text-emerald-600 font-mono text-base">
+                      {potentialWin.toLocaleString('fr-FR')} Ar
+                    </span>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <span className="text-slate-500 block">Gains potentiels:</span>
-                  <span className="font-black text-emerald-600 font-mono text-base">{potentialWin}€</span>
-                </div>
+
+                {/* Place Bet Button */}
+                <button
+                  id="btn-place-bet-pari"
+                  onClick={handlePlaceBet}
+                  className="w-full rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black py-2.5 text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-1.5"
+                >
+                  <Trophy className="h-4 w-4" />
+                  Placer le Pari ({(stake).toLocaleString('fr-FR')} Ar)
+                </button>
               </div>
-            </div>
+            ) : (
+              <div className="text-center py-6 text-slate-400">
+                <p className="text-xs font-bold">Aucune sélection active</p>
+                <p className="text-[10px] opacity-70 mt-0.5">Cliquez sur une cote du tableau pour parier.</p>
+              </div>
+            )
           ) : (
-            <div className="text-center py-6 text-slate-400">
-              <p className="text-xs font-medium">Aucune sélection dans votre billet</p>
-              <p className="text-[10px] opacity-70">Cliquez sur une cote pour l'ajouter.</p>
+            /* Tab 2: Betting History (Active/Settled Bets) */
+            <div className="space-y-3 max-h-[220px] overflow-y-auto pr-1">
+              {[...activeBets, ...settledBets].length === 0 ? (
+                <div className="text-center py-6 text-slate-400">
+                  <p className="text-xs font-bold">Aucun pari enregistré</p>
+                  <p className="text-[10px] opacity-70 mt-0.5">Vos paris terminés et en cours s'afficheront ici.</p>
+                </div>
+              ) : (
+                [...activeBets, ...settledBets].map((bet) => (
+                  <div key={bet.id} className="border border-slate-100 bg-slate-50/70 p-3 rounded-2xl space-y-2 text-[11px] relative">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[9px] font-mono font-bold text-slate-400 uppercase tracking-wide">
+                        ID: {bet.id.slice(-6)}
+                      </span>
+                      <span
+                        className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${
+                          bet.status === 'Won'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : bet.status === 'Lost'
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-amber-100 text-amber-700 animate-pulse'
+                        }`}
+                      >
+                        {bet.status === 'Won' ? 'GAGNÉ' : bet.status === 'Lost' ? 'PERDU' : 'EN COURS'}
+                      </span>
+                    </div>
+
+                    <div className="space-y-1 divide-y divide-slate-100">
+                      {bet.selections.map((sel: any) => (
+                        <div key={sel.matchId} className="pt-1 first:pt-0 flex justify-between text-xs font-semibold text-slate-700">
+                          <span>
+                            {sel.homeTeam} - {sel.awayTeam} : <b className="text-slate-900">{sel.choice}</b>
+                          </span>
+                          <span className="font-mono text-[10px] font-bold text-slate-500">
+                            @{sel.odds.toFixed(2)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex justify-between items-center border-t border-slate-150 pt-2 text-[10px] font-bold text-slate-500">
+                      <div>
+                        Mise: <b className="text-slate-800 font-mono">{bet.stake.toLocaleString('fr-FR')} Ar</b>
+                      </div>
+                      <div className="text-right">
+                        Gains: <b className={`${bet.status === 'Won' ? 'text-emerald-600' : 'text-slate-800'} font-mono`}>
+                          {bet.potentialWin.toLocaleString('fr-FR')} Ar
+                        </b>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           )}
         </div>
@@ -2472,6 +3171,198 @@ export default function App() {
           setActiveView('admin');
         }}
       />
+
+      {/* ADVANCED AI PREDICTION DETAILED SIMULATION & STATS MODAL */}
+      {selectedSimulationMatch && (() => {
+        const match = selectedSimulationMatch;
+        const flagA = getTeamFlagAndColors(match.homeTeam).flag;
+        const flagB = getTeamFlagAndColors(match.awayTeam).flag;
+        const homeWinPct = match.predictions.homeWinPct ?? 52;
+        const drawPct = match.predictions.drawPct ?? 28;
+        const awayWinPct = match.predictions.awayWinPct ?? 20;
+        const exactScorePct = match.predictions.exactScorePct ?? 35;
+        
+        // Dynamic simulated details
+        const referee = "B. Gassama (Gambia)";
+        const weather = "Ensoleillé, 28°C";
+        const stadium = `${match.homeTeam} Stadium`;
+        
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm overflow-y-auto">
+            <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl border border-slate-100 overflow-hidden my-8 animate-in fade-in zoom-in duration-200">
+              {/* Header */}
+              <div className="bg-gradient-to-r from-slate-900 via-[#0B1340] to-slate-900 text-white p-5 relative">
+                <button 
+                  onClick={() => setSelectedSimulationMatch(null)}
+                  className="absolute top-4 right-4 text-white/70 hover:text-white bg-white/10 hover:bg-white/20 p-1.5 rounded-full transition-all cursor-pointer text-xs"
+                >
+                  ✕
+                </button>
+                <span className="text-[9px] font-bold text-indigo-300 uppercase tracking-widest font-mono">
+                  ANALYSE PRÉDICTIVE ET SIMULATION IA
+                </span>
+                <div className="flex justify-between items-center mt-3">
+                  <div className="flex flex-col">
+                    <span className="text-xs text-slate-300 font-mono font-bold uppercase">{match.leagueName}</span>
+                    <span className="text-[10px] text-slate-400 mt-0.5">{match.round}</span>
+                  </div>
+                  <span className="bg-emerald-500/10 text-emerald-400 font-bold text-[9px] uppercase tracking-wider px-2 py-0.5 rounded border border-emerald-500/20">
+                    Précision: 94%
+                  </span>
+                </div>
+              </div>
+              
+              {/* Main Teams presentation */}
+              <div className="p-6 bg-slate-50 border-b border-slate-200/60 text-center relative">
+                <div className="flex justify-around items-center gap-2">
+                  {/* Home Team */}
+                  <div className="flex flex-col items-center w-[38%] min-w-0">
+                    <span className="text-5xl filter drop-shadow-md mb-2">{flagA}</span>
+                    <span className="text-xs font-black uppercase text-slate-900 truncate w-full">{match.homeTeam}</span>
+                    <span className="text-[10px] font-bold text-slate-400 mt-1">Domicile</span>
+                  </div>
+                  
+                  {/* VS / Score area */}
+                  <div className="flex flex-col items-center justify-center shrink-0">
+                    <span className="text-xs font-black text-[#0B5D34] bg-[#E8F5E9] px-3 py-1 rounded-full uppercase tracking-widest border border-green-150">
+                      VS
+                    </span>
+                    <span className="text-[10px] font-mono font-black text-slate-400 mt-2 block uppercase tracking-wider">
+                      STATISTIQUES
+                    </span>
+                  </div>
+                  
+                  {/* Away Team */}
+                  <div className="flex flex-col items-center w-[38%] min-w-0">
+                    <span className="text-5xl filter drop-shadow-md mb-2">{flagB}</span>
+                    <span className="text-xs font-black uppercase text-slate-900 truncate w-full">{match.awayTeam}</span>
+                    <span className="text-[10px] font-bold text-slate-400 mt-1">Extérieur</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="p-5 space-y-5 overflow-y-auto max-h-[60vh] scrollbar-none">
+                {/* Probabilities */}
+                <div className="space-y-2">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">
+                    PROBABILITÉS DE VICTOIRE (1X2)
+                  </span>
+                  <div className="flex items-center gap-1.5 h-6 rounded-lg overflow-hidden bg-slate-100 p-0.5">
+                    <div style={{ width: `${homeWinPct}%` }} className="bg-[#E8F5E9] border-r border-white flex items-center justify-center text-[#2E7D32] text-[9px] font-black h-full rounded-l-md">
+                      1 ({homeWinPct}%)
+                    </div>
+                    <div style={{ width: `${drawPct}%` }} className="bg-slate-200 border-r border-white flex items-center justify-center text-slate-700 text-[9px] font-black h-full">
+                      X ({drawPct}%)
+                    </div>
+                    <div style={{ width: `${awayWinPct}%` }} className="bg-[#0B5D34] flex items-center justify-center text-white text-[9px] font-black h-full rounded-r-md">
+                      2 ({awayWinPct}%)
+                    </div>
+                  </div>
+                  <p className="text-[9px] font-semibold text-slate-400 text-center">
+                    Notre modèle prédictif IA estime l'issue du match en faveur de <strong className="text-slate-700 font-extrabold uppercase">{match.predictions.singleTip === '1' ? 'Équipe Domicile' : match.predictions.singleTip === '2' ? 'Équipe Extérieure' : 'Match Nul'} ({match.predictions.singleTip})</strong> avec {match.predictions.singleTip === '1' ? homeWinPct : match.predictions.singleTip === '2' ? awayWinPct : drawPct}% de confiance.
+                  </p>
+                </div>
+                
+                {/* Prediction Exact Score Box */}
+                <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 flex items-center justify-between gap-3">
+                  <div>
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">
+                      SCORE EXACT PRÉVU
+                    </span>
+                    <span className="text-xl font-black font-mono text-slate-800 tracking-tighter mt-1 block">
+                      {match.predictions.singleTip === '1' ? '2 - 0' : match.predictions.singleTip === '2' ? '0 - 2' : '1 - 1'}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">
+                      CONFIANCE IA
+                    </span>
+                    <span className="text-base font-black text-[#0B5D34] mt-1 block">
+                      {exactScorePct}%
+                    </span>
+                  </div>
+                </div>
+                
+                {/* Detailed metrics table */}
+                <div className="space-y-2">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">
+                    STATISTIQUES DE MATCH PRÉVUES
+                  </span>
+                  <div className="border border-slate-200/60 rounded-2xl divide-y divide-slate-100 overflow-hidden text-xs text-slate-700">
+                    <div className="flex justify-between p-2.5 bg-slate-50/50">
+                      <span className="font-semibold text-slate-500">Possession</span>
+                      <span className="font-extrabold font-mono text-slate-800">{match.predictions.singleTip === '1' ? '58% - 42%' : match.predictions.singleTip === '2' ? '41% - 59%' : '50% - 50%'}</span>
+                    </div>
+                    <div className="flex justify-between p-2.5">
+                      <span className="font-semibold text-slate-500">Buts attendus (xG)</span>
+                      <span className="font-extrabold font-mono text-slate-800">{match.predictions.singleTip === '1' ? '1.92 - 0.74' : match.predictions.singleTip === '2' ? '0.62 - 1.88' : '1.12 - 1.08'}</span>
+                    </div>
+                    <div className="flex justify-between p-2.5 bg-slate-50/50">
+                      <span className="font-semibold text-slate-500">Tirs cadrés</span>
+                      <span className="font-extrabold font-mono text-slate-800">{match.predictions.singleTip === '1' ? '7 - 3' : match.predictions.singleTip === '2' ? '3 - 8' : '5 - 5'}</span>
+                    </div>
+                    <div className="flex justify-between p-2.5">
+                      <span className="font-semibold text-slate-500">Météo & Arbitre</span>
+                      <span className="font-extrabold text-slate-800">{weather} | {referee}</span>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Simulation Highlights */}
+                <div className="space-y-2.5">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">
+                    DÉROULEMENT SIMULÉ DU MATCH
+                  </span>
+                  <div className="bg-slate-900 text-slate-200 font-mono text-[11px] p-4 rounded-2xl space-y-2 border border-slate-800 leading-relaxed">
+                    <p className="text-amber-400 font-bold">[00'] Coup d'envoi virtuel simulé dans notre moteur d'intelligence artificielle.</p>
+                    <p>
+                      {match.predictions.singleTip === '1' 
+                        ? `[14'] But! ${match.homeTeam} ouvre le score sur une frappe limpide à l'entrée de la surface.` 
+                        : `[22'] But! ${match.awayTeam} trouve la faille après un débordement rapide sur l'aile droite.`
+                      }
+                    </p>
+                    <p className="text-slate-400">
+                      {match.predictions.singleTip === '1'
+                        ? `[68'] Occasion manquée pour ${match.awayTeam} : le ballon heurte la transversale.`
+                        : `[71'] Arrêt réflexe exceptionnel du gardien de ${match.homeTeam} pour maintenir l'écart.`
+                      }
+                    </p>
+                    <p>
+                      {match.predictions.singleTip === '1'
+                        ? `[83'] But! Doublé pour ${match.homeTeam} qui scelle définitivement le sort de la rencontre.`
+                        : `[89'] But! ${match.awayTeam} aggrave la marque sur un contre parfaitement orchestré.`
+                      }
+                    </p>
+                    <p className="text-green-400 font-bold">[90'] Fin de la simulation. Le modèle valide le prono {match.predictions.singleTip}.</p>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Footer actions */}
+              <div className="bg-slate-50 p-4 border-t border-slate-200/60 flex gap-2.5">
+                <button
+                  onClick={() => {
+                    setSelectedSimulationMatch(null);
+                  }}
+                  className="flex-1 py-3 text-xs font-black uppercase tracking-wider rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  Fermer
+                </button>
+                <button
+                  onClick={() => {
+                    handleBetClick(match.id, match.predictions.singleTip as any);
+                    setSelectedSimulationMatch(null);
+                    setIsBetSlipOpen(true);
+                  }}
+                  className="flex-1 py-3 text-xs font-black uppercase tracking-wider rounded-xl bg-[#0B5D34] text-white hover:bg-[#084A29] transition-colors cursor-pointer"
+                >
+                  Ajouter au Ticket
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
     </div>
   );

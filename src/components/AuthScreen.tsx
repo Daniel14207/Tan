@@ -128,6 +128,7 @@ export default function AuthScreen({ onLoginSuccess, allUsers, onRegisterUser }:
           passwordHash,
           isVip: false,
           isSuspended: false,
+          soldeLiveTop: 50000,
           createdAt: new Date().toLocaleDateString('fr-FR')
         };
 
