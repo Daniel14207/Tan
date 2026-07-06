@@ -250,19 +250,40 @@ export default function AnalysePremium({ onBack }: AnalysePremiumProps) {
     }, intervalTime);
 
     try {
-      // Trigger API call concurrently
-      const payloadFiles = historyFiles.map(f => ({
-        name: f.name,
-        mimeType: f.type,
-        base64: f.base64,
-        isText: f.isText,
-        textContent: f.textContent
-      }));
+      // Sequentially request OCR for each file to completely avoid Vercel 4.5MB payload limits and 10s timeouts
+      const textRepresentations: string[] = [];
+      for (let i = 0; i < historyFiles.length; i++) {
+        const file = historyFiles[i];
+        if (file.isText) {
+          textRepresentations.push(`--- CONTENU DU FICHIER: ${file.name} ---\n${file.textContent || ""}`);
+        } else {
+          const ocrRes = await fetch("/api/analyse-premium/ocr", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              file: {
+                name: file.name,
+                mimeType: file.type,
+                base64: file.base64,
+                isText: false
+              }
+            })
+          });
+          if (!ocrRes.ok) {
+            const errJson = await ocrRes.json().catch(() => ({}));
+            throw new Error(errJson.error || `Erreur lors de l'extraction de l'image "${file.name}"`);
+          }
+          const ocrData = await ocrRes.json();
+          textRepresentations.push(`--- CONTENU DU FICHIER: ${file.name} ---\n${ocrData.text}`);
+        }
+      }
+
+      const compiledText = textRepresentations.join("\n\n");
 
       const res = await fetch("/api/analyse-premium/historique", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files: payloadFiles })
+        body: JSON.stringify({ compiledText })
       });
 
       if (!res.ok) {
@@ -317,19 +338,41 @@ export default function AnalysePremium({ onBack }: AnalysePremiumProps) {
     }, intervalTime);
 
     try {
-      const payloadFiles = matchFiles.map(f => ({
-        name: f.name,
-        mimeType: f.type,
-        base64: f.base64,
-        isText: f.isText,
-        textContent: f.textContent
-      }));
+      // Sequentially request OCR for each file to completely avoid Vercel 4.5MB payload limits and 10s timeouts
+      const textRepresentations: string[] = [];
+      for (let i = 0; i < matchFiles.length; i++) {
+        const file = matchFiles[i];
+        if (file.isText) {
+          textRepresentations.push(`--- CONTENU DU DOCUMENT DE MATCH: ${file.name} ---\n${file.textContent || ""}`);
+        } else {
+          const ocrRes = await fetch("/api/analyse-premium/ocr", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              file: {
+                name: file.name,
+                mimeType: file.type,
+                base64: file.base64,
+                isText: false
+              }
+            })
+          });
+          if (!ocrRes.ok) {
+            const errJson = await ocrRes.json().catch(() => ({}));
+            throw new Error(errJson.error || `Erreur lors de l'extraction de l'image "${file.name}"`);
+          }
+          const ocrData = await ocrRes.json();
+          textRepresentations.push(`--- CONTENU DU DOCUMENT DE MATCH: ${file.name} ---\n${ocrData.text}`);
+        }
+      }
+
+      const compiledText = textRepresentations.join("\n\n");
 
       const res = await fetch("/api/analyse-premium/analyse", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          files: payloadFiles,
+          compiledText,
           baseStatistique: memorizedHistory
         })
       });

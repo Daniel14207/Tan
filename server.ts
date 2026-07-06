@@ -188,42 +188,67 @@ async function queryOpenRouterWithFallback(messages: any[], jsonMode: boolean = 
   throw new Error(`Tous les modèles d'analyse OpenRouter ont échoué. Dernière erreur: ${lastError?.message || lastError}`);
 }
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
+const PORT = 3000;
 
-  // Set high body limits to allow up to 20 images of 20MB
-  app.use(express.json({ limit: "150mb" }));
-  app.use(express.urlencoded({ limit: "150mb", extended: true }));
+// Set high body limits to allow up to 20 images of 20MB
+app.use(express.json({ limit: "150mb" }));
+app.use(express.urlencoded({ limit: "150mb", extended: true }));
 
-  // API Route: Analyze history
-  app.post("/api/analyse-premium/historique", async (req, res) => {
-    try {
+// API Route: Perform OCR on a single file (extremely useful on Vercel to bypass timeout & payload limits)
+app.post("/api/analyse-premium/ocr", async (req, res) => {
+  try {
+    const { file } = req.body;
+    if (!file) {
+      return res.status(400).json({ error: "Aucun fichier n'a été fourni." });
+    }
+
+    if (!process.env.OPENROUTER_API_KEY && !process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ error: "L'API Key OPENROUTER_API_KEY ou GEMINI_API_KEY n'est pas configurée dans les variables d'environnement." });
+    }
+
+    console.log(`[OCR Single] Extracting text for file: ${file.name}`);
+    const text = await getOcrText(file);
+    res.json({ success: true, text });
+  } catch (error: any) {
+    console.error("[OCR Single] Erreur:", error);
+    res.status(500).json({ error: error.message || "Erreur lors de l'OCR du fichier." });
+  }
+});
+
+// API Route: Analyze history (supports pre-compiled text or fallback to files)
+app.post("/api/analyse-premium/historique", async (req, res) => {
+  try {
+    let compiledText = "";
+
+    if (req.body.compiledText) {
+      compiledText = req.body.compiledText;
+    } else {
       const { files } = req.body;
       if (!files || !Array.isArray(files) || files.length === 0) {
         return res.status(400).json({ error: "Aucun fichier d'historique n'a été fourni." });
       }
 
-      if (!process.env.OPENROUTER_API_KEY) {
-        return res.status(500).json({ error: "L'API Key OPENROUTER_API_KEY n'est pas configurée dans les variables d'environnement (Settings > Secrets)." });
-      }
-
       console.log(`[Historique] Processing ${files.length} files...`);
 
-      // 1. OCR Step: Transform all input files to text representations
+      // OCR Step fallback (for non-chunked or local compatibility)
       const textRepresentations: string[] = [];
       for (const file of files) {
         const text = await getOcrText(file);
         textRepresentations.push(`--- CONTENU DU FICHIER: ${file.name} ---\n${text}`);
       }
+      compiledText = textRepresentations.join("\n\n");
+    }
 
-      const compiledText = textRepresentations.join("\n\n");
+    if (!process.env.OPENROUTER_API_KEY) {
+      return res.status(500).json({ error: "L'API Key OPENROUTER_API_KEY n'est pas configurée dans les variables d'environnement (Settings > Secrets)." });
+    }
 
-      // 2. IA analysis with OpenRouter
-      const messages = [
-        {
-          role: "user",
-          content: `Tu es un moteur d'analyse statistique sportive de haut niveau (Analyse Premium).
+    // 2. IA analysis with OpenRouter
+    const messages = [
+      {
+        role: "user",
+        content: `Tu es un moteur d'analyse statistique sportive de haut niveau (Analyse Premium).
 Analyse les données d'historique extraites ci-dessous :
 
 ${compiledText}
@@ -253,58 +278,64 @@ Le JSON retourné doit correspondre STRICTEMENT au schéma suivant, sans bloc de
   ],
   "cycles": "Cycles de forme ou tendances détectées."
 }`
-        }
-      ];
-
-      const text = await queryOpenRouterWithFallback(messages, true);
-      
-      // Clean possible Markdown wrappers
-      let cleanText = text.trim();
-      if (cleanText.startsWith("```")) {
-        cleanText = cleanText.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/, "");
       }
-      cleanText = cleanText.trim();
+    ];
 
-      const parsedData = JSON.parse(cleanText);
-      res.json({ success: true, baseStatistique: parsedData });
-    } catch (error: any) {
-      console.error("Erreur historique:", error);
-      res.status(500).json({ error: error.message || "Erreur interne du moteur d'analyse." });
+    const text = await queryOpenRouterWithFallback(messages, true);
+    
+    // Clean possible Markdown wrappers
+    let cleanText = text.trim();
+    if (cleanText.startsWith("```")) {
+      cleanText = cleanText.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/, "");
     }
-  });
+    cleanText = cleanText.trim();
 
-  // API Route: Analyze Matches with history context
-  app.post("/api/analyse-premium/analyse", async (req, res) => {
-    try {
-      const { files, baseStatistique } = req.body;
+    const parsedData = JSON.parse(cleanText);
+    res.json({ success: true, baseStatistique: parsedData });
+  } catch (error: any) {
+    console.error("Erreur historique:", error);
+    res.status(500).json({ error: error.message || "Erreur interne du moteur d'analyse." });
+  }
+});
+
+// API Route: Analyze Matches with history context
+app.post("/api/analyse-premium/analyse", async (req, res) => {
+  try {
+    const { baseStatistique } = req.body;
+    let compiledText = "";
+
+    if (req.body.compiledText) {
+      compiledText = req.body.compiledText;
+    } else {
+      const { files } = req.body;
       if (!files || !Array.isArray(files) || files.length === 0) {
         return res.status(400).json({ error: "Aucun fichier de match n'a été fourni." });
       }
 
-      if (!process.env.OPENROUTER_API_KEY) {
-        return res.status(500).json({ error: "L'API Key OPENROUTER_API_KEY n'est pas configurée dans les variables d'environnement (Settings > Secrets)." });
-      }
-
       console.log(`[Analyse] Processing ${files.length} match files...`);
 
-      // 1. OCR Step: Transform all input match files to text representations
+      // OCR Step fallback
       const textRepresentations: string[] = [];
       for (const file of files) {
         const text = await getOcrText(file);
         textRepresentations.push(`--- CONTENU DU DOCUMENT DE MATCH: ${file.name} ---\n${text}`);
       }
+      compiledText = textRepresentations.join("\n\n");
+    }
 
-      const compiledText = textRepresentations.join("\n\n");
+    if (!process.env.OPENROUTER_API_KEY) {
+      return res.status(500).json({ error: "L'API Key OPENROUTER_API_KEY n'est pas configurée dans les variables d'environnement (Settings > Secrets)." });
+    }
 
-      const historyContextStr = baseStatistique 
-        ? JSON.stringify(baseStatistique) 
-        : "Aucun historique mémorisé pour cette session.";
+    const historyContextStr = baseStatistique 
+      ? JSON.stringify(baseStatistique) 
+      : "Aucun historique mémorisé pour cette session.";
 
-      // 2. IA predictions with OpenRouter
-      const messages = [
-        {
-          role: "user",
-          content: `Tu es un moteur d'analyse de prédiction sportive (Analyse Premium).
+    // 2. IA predictions with OpenRouter
+    const messages = [
+      {
+        role: "user",
+        content: `Tu es un moteur d'analyse de prédiction sportive (Analyse Premium).
 Tu as mémorisé la base de statistiques historiques suivante pour cette session :
 ${historyContextStr}
 
@@ -331,24 +362,30 @@ RÈGLES ABSOLUES :
 - Affiche UNIQUEMENT une seule ligne par match.
 - Aucun autre texte, aucun commentaire, aucune explication, aucun pourcentage, aucune introduction ni conclusion.
 - Ne mentionne jamais les mots : Gemini, Grok, ChatGPT, IA, intelligence artificielle.`
-        }
-      ];
+      }
+    ];
 
-      const text = await queryOpenRouterWithFallback(messages, false);
+    const text = await queryOpenRouterWithFallback(messages, false);
 
-      // Clean lines to keep only match lines
-      const lines = text.split("\n")
-        .map(line => line.trim())
-        .filter(line => line && line.includes(" vs ") && line.includes(":"));
+    // Clean lines to keep only match lines
+    const lines = text.split("\n")
+      .map(line => line.trim())
+      .filter(line => line && line.includes(" vs ") && line.includes(":"));
 
-      res.json({ success: true, predictions: lines });
-    } catch (error: any) {
-      console.error("Erreur analyse:", error);
-      res.status(500).json({ error: error.message || "Erreur interne du moteur d'analyse." });
-    }
-  });
+    res.json({ success: true, predictions: lines });
+  } catch (error: any) {
+    console.error("Erreur analyse:", error);
+    res.status(500).json({ error: error.message || "Erreur interne du moteur d'analyse." });
+  }
+});
 
-  // Vite middleware setup
+async function startServer() {
+  if (process.env.VERCEL) {
+    console.log("[Analyse Premium Server] Running in Serverless/Vercel environment");
+    return;
+  }
+
+  // Vite middleware setup (only in non-Vercel environment)
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -369,3 +406,5 @@ RÈGLES ABSOLUES :
 }
 
 startServer();
+
+export default app;
