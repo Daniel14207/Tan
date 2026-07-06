@@ -61,8 +61,12 @@ import {
 export default function App() {
   // --- USER ACCOUNTS AND AUTH STATE ---
   const [users, setUsers] = useState<UserAccount[]>(() => {
-    const saved = localStorage.getItem('sourspark_users');
-    if (saved) return JSON.parse(saved);
+    try {
+      const saved = localStorage.getItem('sourspark_users');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error("Failed to parse sourspark_users, resetting to defaults:", e);
+    }
     const initialUsers: UserAccount[] = [
       {
         userId: 'USR-100001',
@@ -92,20 +96,28 @@ export default function App() {
   });
 
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
-    const saved = localStorage.getItem('sourspark_current_user');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      const freshUser = JSON.parse(localStorage.getItem('sourspark_users') || '[]').find(
-        (u: any) => u.userId === parsed.userId
-      );
-      if (freshUser) {
-        if (freshUser.isSuspended) {
-          localStorage.removeItem('sourspark_current_user');
-          return null;
+    try {
+      const saved = localStorage.getItem('sourspark_current_user');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        let freshUsersList: UserAccount[] = [];
+        try {
+          freshUsersList = JSON.parse(localStorage.getItem('sourspark_users') || '[]');
+        } catch (_) {}
+        const freshUser = freshUsersList.find(
+          (u: any) => u.userId === parsed.userId
+        );
+        if (freshUser) {
+          if (freshUser.isSuspended) {
+            localStorage.removeItem('sourspark_current_user');
+            return null;
+          }
+          return freshUser;
         }
-        return freshUser;
+        return parsed;
       }
-      return parsed;
+    } catch (e) {
+      console.error("Failed to parse sourspark_current_user:", e);
     }
     return null;
   });
@@ -143,13 +155,23 @@ export default function App() {
   }, []);
 
   const [activeBets, setActiveBets] = useState<any[]>(() => {
-    const saved = localStorage.getItem('sourspark_active_bets');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem('sourspark_active_bets');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error("Failed to parse sourspark_active_bets:", e);
+      return [];
+    }
   });
 
   const [settledBets, setSettledBets] = useState<any[]>(() => {
-    const saved = localStorage.getItem('sourspark_settled_bets');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem('sourspark_settled_bets');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error("Failed to parse sourspark_settled_bets:", e);
+      return [];
+    }
   });
 
   // Generate virtual timetable of 11 kickoff times (spaced by 2 minutes) aligned with currentCycleIndex
@@ -264,23 +286,35 @@ export default function App() {
   }, [currentCycleIndex, cycleSeconds, currentVirtualTimes, selectedDate]);
 
   const [leagues, setLeagues] = useState<League[]>(() => {
-    const saved = localStorage.getItem('sourspark_leagues');
-    if (saved) return JSON.parse(saved);
+    try {
+      const saved = localStorage.getItem('sourspark_leagues');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error("Failed to parse sourspark_leagues:", e);
+    }
     localStorage.setItem('sourspark_leagues', JSON.stringify(LEAGUES_LIST));
     return LEAGUES_LIST;
   });
 
   // --- PAYMENT REQUESTS ---
   const [paymentRequests, setPaymentRequests] = useState<PaymentRequest[]>(() => {
-    const saved = localStorage.getItem('sourspark_payment_requests');
-    if (saved) return JSON.parse(saved);
+    try {
+      const saved = localStorage.getItem('sourspark_payment_requests');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error("Failed to parse sourspark_payment_requests:", e);
+    }
     return [];
   });
 
   // --- LIVE SIGNALS & ANNOUNCEMENTS ---
   const [liveSignals, setLiveSignals] = useState<LiveSignal[]>(() => {
-    const saved = localStorage.getItem('sourspark_live_signals');
-    if (saved) return JSON.parse(saved);
+    try {
+      const saved = localStorage.getItem('sourspark_live_signals');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error("Failed to parse sourspark_live_signals:", e);
+    }
     const initialSignals: LiveSignal[] = [
       {
         id: 'sig-1',
@@ -308,8 +342,12 @@ export default function App() {
 
   // --- SUPPORT CHAT MESSAGES ---
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
-    const saved = localStorage.getItem('sourspark_chat_messages');
-    if (saved) return JSON.parse(saved);
+    try {
+      const saved = localStorage.getItem('sourspark_chat_messages');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error("Failed to parse sourspark_chat_messages:", e);
+    }
     const initialMsgs: ChatMessage[] = [
       {
         id: 'welcome-1',

@@ -124,7 +124,9 @@ export interface ParsedMatch {
 
 export interface LiveSignalComment {
   id: string;
-  username: string;
+  username?: string;
+  authorName?: string;
+  authorRole?: string;
   text: string;
   timestamp: string;
   replies?: LiveSignalComment[];
@@ -149,11 +151,12 @@ export interface LiveSignal {
   shares?: number;
   parsedMatches?: ParsedMatch[];
   reactions?: {
-    love: number;
-    like: number;
-    fire: number;
-    bravo: number;
-    wow: number;
+    love?: number;
+    like?: number;
+    fire?: number;
+    bravo?: number;
+    clap?: number;
+    wow?: number;
   };
 }
 

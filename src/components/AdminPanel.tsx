@@ -983,7 +983,7 @@ export default function AdminPanel({
             </div>
             
             <div className="text-[10px] text-slate-500 font-mono hidden lg:flex items-center gap-1.5 bg-slate-950/30 border border-slate-900/60 rounded-lg px-2.5 py-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" strokeLinecap="round" />
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
               SERVER : ONLINE
             </div>
           </div>
