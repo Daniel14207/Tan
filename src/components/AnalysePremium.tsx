@@ -441,6 +441,7 @@ export default function AnalysePremium({ onBack }: AnalysePremiumProps) {
       <AnimatePresence>
         {isProcessingHistory && (
           <motion.div
+            key="premium-history-overlay"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -506,6 +507,7 @@ export default function AnalysePremium({ onBack }: AnalysePremiumProps) {
       <AnimatePresence>
         {isProcessingMatches && (
           <motion.div
+            key="premium-matches-overlay"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
