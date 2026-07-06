@@ -152,17 +152,16 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
 
-  // Generate virtual timetable of 9 hours (spaced by 2 minutes) around current time
+  // Generate virtual timetable of 11 kickoff times (spaced by 2 minutes) aligned with currentCycleIndex
   const currentVirtualTimes = useMemo(() => {
-    const now = new Date();
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    
-    // Align to closest even minute
-    const activeMinutes = currentMinutes % 2 === 0 ? currentMinutes : currentMinutes - 1;
-    
     const times = [];
-    for (let offset = -8; offset <= 8; offset += 2) {
-      const min = activeMinutes + offset;
+    const cycleStartDate = new Date(currentCycleIndex * 190000);
+    const baseMinutes = cycleStartDate.getHours() * 60 + cycleStartDate.getMinutes();
+    const stableCenterMinutes = baseMinutes % 2 === 0 ? baseMinutes : baseMinutes - 1;
+
+    for (let index = 0; index < 11; index++) {
+      const offset = index - 5; // index 5 represents the current active LIVE session (offset = 0)
+      const min = stableCenterMinutes + offset * 2;
       const h = Math.floor((min + 1440) % 1440 / 60);
       const m = (min + 1440) % 1440 % 60;
       const formatted = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
@@ -212,17 +211,17 @@ export default function App() {
 
     LEAGUES_LIST.forEach((league) => {
       currentVirtualTimes.forEach((timeItem, index) => {
-        const roundIndex = currentCycleIndex + (index - 4);
+        const roundIndex = currentCycleIndex + (index - 5);
         const matchesForRound = generateVirtualRound(league.id, timeItem.time, roundIndex);
         
         matchesForRound.forEach((m) => {
           m.date = selectedDate;
           
-          if (index < 4) {
+          if (index < 5) {
             // Completed session (Past)
             m.matchStatus = 'FT';
             m.predictions.status = m.finalScoreHome! > m.finalScoreAway! ? 'Won' : 'Lost';
-          } else if (index === 4) {
+          } else if (index === 5) {
             // Current session
             m.matchStatus = currentMatchStatus;
             if (currentMatchStatus === 'Pending') {
@@ -331,13 +330,17 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   const [selectedLeagueTab, setSelectedLeagueTab] = useState<'results' | 'matches' | 'standings'>('matches');
-  const [selectedHourIndex, setSelectedHourIndex] = useState<number>(4);
+  const [selectedHourIndex, setSelectedHourIndex] = useState<number>(5);
   const [activeBetFilter, setActiveBetFilter] = useState<string>('1X2');
+  const [lastManualFilterClick, setLastManualFilterClick] = useState<number>(0);
 
   // Auto-switch betting market in real-time based on cycleSeconds!
   useEffect(() => {
+    // If the user interacted recently (less than 8s ago), don't auto-switch.
+    if (Date.now() - lastManualFilterClick < 8000) return;
+
     if (cycleSeconds < 120) {
-      // Countdown phase
+      // Countdown phase: pre-match markets
       const step = Math.floor(cycleSeconds / 24);
       if (step === 0) setActiveBetFilter('1X2');
       else if (step === 1) setActiveBetFilter('DOUBLE CHANCE');
@@ -346,27 +349,43 @@ export default function App() {
       else setActiveBetFilter('CORRECT SCORE');
     } else if (cycleSeconds < 145) {
       // First Half phase
-      const elapsed = cycleSeconds - 120;
-      if (elapsed < 8) setActiveBetFilter('MI-TPS 1X2');
-      else if (elapsed < 16) setActiveBetFilter('MI-TPS DC');
-      else setActiveBetFilter('MI-TPS SCORE');
+      const elapsed = cycleSeconds - 120; // 0 to 24s
+      const step = Math.floor(elapsed / 6);
+      if (step === 0) setActiveBetFilter('HT 1X2');
+      else if (step === 1) setActiveBetFilter('HT DOUBLE CHANCE');
+      else if (step === 2) setActiveBetFilter('HT OVER/UNDER');
+      else setActiveBetFilter('HT CORRECT SCORE');
     } else if (cycleSeconds < 150) {
-      // Half Time phase
-      setActiveBetFilter('HALF TIME');
+      // Half Time phase - Display Half-Time score / stats
+      setActiveBetFilter('HT CORRECT SCORE');
     } else if (cycleSeconds < 175) {
       // Second Half phase
-      const elapsed = cycleSeconds - 150;
-      if (elapsed < 8) setActiveBetFilter('2ND HALF 1X2');
-      else if (elapsed < 16) setActiveBetFilter('2ND HALF DC');
-      else setActiveBetFilter('2ND HALF SCORE');
+      const elapsed = cycleSeconds - 150; // 0 to 24s
+      const step = Math.floor(elapsed / 6);
+      if (step === 0) setActiveBetFilter('2ND HALF 1X2');
+      else if (step === 1) setActiveBetFilter('2ND HALF DOUBLE CHANCE');
+      else if (step === 2) setActiveBetFilter('2ND HALF OVER/UNDER');
+      else setActiveBetFilter('2ND HALF CORRECT SCORE');
     } else {
-      // Full Time phase
-      const elapsed = cycleSeconds - 175;
-      if (elapsed < 5) setActiveBetFilter('FINAL 1X2');
-      else if (elapsed < 10) setActiveBetFilter('FINAL SCORE');
-      else setActiveBetFilter('ALL FINAL');
+      // Full Time phase: Automatically publish all markets in sequence
+      const elapsed = cycleSeconds - 175; // 0 to 14s
+      const step = Math.floor(elapsed / 1.5); // 10 steps (0 to 9)
+      const sequence = [
+        '1X2',
+        'DOUBLE CHANCE',
+        'OVER/UNDER',
+        'BTTS',
+        'CORRECT SCORE',
+        'HT 1X2',
+        'HT CORRECT SCORE',
+        '2ND HALF 1X2',
+        '2ND HALF CORRECT SCORE',
+        'FINAL RESULTS'
+      ];
+      const activeFilter = sequence[Math.min(step, sequence.length - 1)];
+      setActiveBetFilter(activeFilter);
     }
-  }, [cycleSeconds]);
+  }, [cycleSeconds, lastManualFilterClick]);
   const [selectedSimulationMatch, setSelectedSimulationMatch] = useState<Match | null>(null);
   const [currentTimeTick, setCurrentTimeTick] = useState<number>(0);
 
@@ -381,7 +400,7 @@ export default function App() {
   // Reset tab and active hour when changing league
   useEffect(() => {
     setSelectedLeagueTab('matches');
-    setSelectedHourIndex(4);
+    setSelectedHourIndex(5);
   }, [selectedLeagueId]);
   
   const [leagueHourIndices, setLeagueHourIndices] = useState<Record<string, number>>({});
@@ -926,9 +945,9 @@ export default function App() {
     const norm = filter.toUpperCase().trim();
     
     // Fallback double chance calculations
-    const dc1X = parseFloat((1.0 / (1.0/m.odds.homeWin + 1.0/m.odds.draw) * 0.9).toFixed(2));
-    const dc12 = parseFloat((1.0 / (1.0/m.odds.homeWin + 1.0/m.odds.awayWin) * 0.9).toFixed(2));
-    const dcX2 = parseFloat((1.0 / (1.0/m.odds.draw + 1.0/m.odds.awayWin) * 0.9).toFixed(2));
+    const dc1X = parseFloat((1.0 / (1.0/m.odds.homeWin + 1.0/m.odds.draw) * 0.95).toFixed(2));
+    const dc12 = parseFloat((1.0 / (1.0/m.odds.homeWin + 1.0/m.odds.awayWin) * 0.95).toFixed(2));
+    const dcX2 = parseFloat((1.0 / (1.0/m.odds.draw + 1.0/m.odds.awayWin) * 0.95).toFixed(2));
 
     // Fallback btts/overUnder
     const overOdds = m.predictions.overUnder25 === 'Over' ? m.predictions.overUnderOdds : parseFloat((m.predictions.overUnderOdds * 0.85).toFixed(2));
@@ -938,6 +957,16 @@ export default function App() {
     const nonOdds = m.predictions.btts === 'No' ? m.predictions.bttsOdds : parseFloat((m.predictions.bttsOdds * 0.85).toFixed(2));
 
     const predScore = getPredictedScore(m);
+    const parts = predScore.split('-');
+    const hSc = parseInt(parts[0]) || 0;
+    const aSc = parseInt(parts[1]) || 0;
+    const oddScore = parseFloat((6.5 + (m.predictions.exactScorePct || 10) / 3).toFixed(2));
+    const altScore1 = hSc > aSc ? `${hSc}-${aSc + 1}` : hSc === aSc ? `${hSc + 1}-${aSc}` : `${hSc + 1}-${aSc}`;
+    const altOdd1 = parseFloat((oddScore * 1.25).toFixed(2));
+
+    // HT correct score helper
+    const htScore = `${m.halfTimeScoreHome}-${m.halfTimeScoreAway}`;
+    const htAltScore = hSc > aSc ? `1-0` : `0-1`;
 
     if (norm === '1X2' || norm === 'FINAL 1X2' || norm === 'ALL FINAL') {
       return [
@@ -946,7 +975,7 @@ export default function App() {
         { label: '2', odd: m.odds.awayWin, choice: '2' },
       ];
     }
-    if (norm === 'DOUBLE CHANCE' || norm === '2ND HALF DC' || norm === 'MI-TPS DC') {
+    if (norm === 'DOUBLE CHANCE') {
       return [
         { label: '1X', odd: dc1X, choice: '1X' },
         { label: '12', odd: dc12, choice: '12' },
@@ -965,23 +994,36 @@ export default function App() {
         { label: 'Non', odd: nonOdds, choice: 'Non' },
       ];
     }
-    if (norm === 'CORRECT SCORE' || norm === 'FINAL SCORE' || norm === 'HT SCORE' || norm === '2ND HALF SCORE' || norm === 'MI-TPS SCORE') {
-      const parts = predScore.split('-');
-      const hSc = parseInt(parts[0]) || 0;
-      const aSc = parseInt(parts[1]) || 0;
-      const oddScore = parseFloat((6.5 + (m.predictions.exactScorePct || 10) / 3).toFixed(2));
-      const altScore1 = hSc > aSc ? `${hSc}-${aSc + 1}` : hSc === aSc ? `${hSc + 1}-${aSc}` : `${hSc + 1}-${aSc}`;
-      const altOdd1 = parseFloat((oddScore * 1.25).toFixed(2));
+    if (norm === 'CORRECT SCORE' || norm === 'FINAL SCORE') {
       return [
         { label: predScore, odd: oddScore, choice: predScore },
         { label: altScore1, odd: altOdd1, choice: altScore1 },
       ];
     }
-    if (norm === 'MI-TPS 1X2' || norm === 'HALF TIME') {
+    if (norm === 'HT 1X2' || norm === 'MI-TPS 1X2' || norm === 'HALF TIME') {
       return [
         { label: 'HT 1', odd: parseFloat((m.odds.homeWin * 0.85 + 0.3).toFixed(2)), choice: 'HT 1' },
         { label: 'HT X', odd: parseFloat((m.odds.draw * 0.85).toFixed(2)), choice: 'HT X' },
         { label: 'HT 2', odd: parseFloat((m.odds.awayWin * 0.85 + 0.3).toFixed(2)), choice: 'HT 2' },
+      ];
+    }
+    if (norm === 'HT DOUBLE CHANCE' || norm === 'MI-TPS DC') {
+      return [
+        { label: 'HT 1X', odd: parseFloat((dc1X * 0.95 + 0.1).toFixed(2)), choice: 'HT 1X' },
+        { label: 'HT 12', odd: parseFloat((dc12 * 0.9).toFixed(2)), choice: 'HT 12' },
+        { label: 'HT X2', odd: parseFloat((dcX2 * 0.95 + 0.1).toFixed(2)), choice: 'HT X2' },
+      ];
+    }
+    if (norm === 'HT OVER/UNDER') {
+      return [
+        { label: 'HT Over 1.5', odd: parseFloat((overOdds * 1.55).toFixed(2)), choice: 'HT Over 1.5' },
+        { label: 'HT Under 1.5', odd: parseFloat((underOdds * 0.65).toFixed(2)), choice: 'HT Under 1.5' },
+      ];
+    }
+    if (norm === 'HT CORRECT SCORE' || norm === 'MI-TPS SCORE' || norm === 'HT SCORE') {
+      return [
+        { label: `HT ${htScore}`, odd: parseFloat((oddScore * 0.65).toFixed(2)), choice: `HT ${htScore}` },
+        { label: `HT ${htAltScore}`, odd: parseFloat((altOdd1 * 0.65).toFixed(2)), choice: `HT ${htAltScore}` },
       ];
     }
     if (norm === '2ND HALF 1X2') {
@@ -989,6 +1031,45 @@ export default function App() {
         { label: '2H 1', odd: parseFloat((m.odds.homeWin * 0.9).toFixed(2)), choice: '2H 1' },
         { label: '2H X', odd: parseFloat((m.odds.draw * 0.9).toFixed(2)), choice: '2H X' },
         { label: '2H 2', odd: parseFloat((m.odds.awayWin * 0.9).toFixed(2)), choice: '2H 2' },
+      ];
+    }
+    if (norm === '2ND HALF DOUBLE CHANCE' || norm === '2ND HALF DC') {
+      return [
+        { label: '2H 1X', odd: parseFloat((dc1X * 0.95).toFixed(2)), choice: '2H 1X' },
+        { label: '2H 12', odd: parseFloat((dc12 * 0.95).toFixed(2)), choice: '2H 12' },
+        { label: '2H X2', odd: parseFloat((dcX2 * 0.95).toFixed(2)), choice: '2H X2' },
+      ];
+    }
+    if (norm === '2ND HALF OVER/UNDER') {
+      return [
+        { label: '2H Over 1.5', odd: parseFloat((overOdds * 1.35).toFixed(2)), choice: '2H Over 1.5' },
+        { label: '2H Under 1.5', odd: parseFloat((underOdds * 0.75).toFixed(2)), choice: '2H Under 1.5' },
+      ];
+    }
+    if (norm === '2ND HALF CORRECT SCORE' || norm === '2MT-CS' || norm === '2ND HALF SCORE') {
+      return [
+        { label: `2H ${htScore}`, odd: parseFloat((oddScore * 0.7).toFixed(2)), choice: `2H ${htScore}` },
+        { label: `2H ${htAltScore}`, odd: parseFloat((altOdd1 * 0.7).toFixed(2)), choice: `2H ${htAltScore}` },
+      ];
+    }
+    if (norm === 'HANDICAP') {
+      return [
+        { label: 'H1 (-1)', odd: parseFloat((m.odds.homeWin * 1.7).toFixed(2)), choice: 'H1 (-1)' },
+        { label: 'H2 (+1)', odd: parseFloat((m.odds.awayWin * 0.7).toFixed(2)), choice: 'H2 (+1)' },
+      ];
+    }
+    if (norm === 'TOTAL GOALS') {
+      return [
+        { label: '0-1 but', odd: 1.95, choice: '0-1 GOAL' },
+        { label: '2-3 buts', odd: 1.85, choice: '2-3 GOALS' },
+        { label: '4+ buts', odd: 2.60, choice: '4+ GOALS' },
+      ];
+    }
+    if (norm === 'FINAL RESULTS') {
+      return [
+        { label: '1', odd: m.odds.homeWin, choice: '1' },
+        { label: 'X', odd: m.odds.draw, choice: 'X' },
+        { label: '2', odd: m.odds.awayWin, choice: '2' },
       ];
     }
     
@@ -1098,6 +1179,19 @@ export default function App() {
       if (formattedChoice === '2H NON') return h2H === 0 || a2H === 0;
       
       if (formattedChoice === `2H ${h2H}-${a2H}` || formattedChoice === `2H ${h2H} - ${a2H}`) return true;
+
+      // --- NEW MARKETS SUPPORT ---
+      if (formattedChoice === 'HT OVER 1.5') return (hHT + aHT) > 1.5;
+      if (formattedChoice === 'HT UNDER 1.5') return (hHT + aHT) < 1.5;
+      if (formattedChoice === '2H OVER 1.5') return (h2H + a2H) > 1.5;
+      if (formattedChoice === '2H UNDER 1.5') return (h2H + a2H) < 1.5;
+      
+      if (formattedChoice === 'H1 (-1)' || formattedChoice === 'H1(-1)') return (h - 1) > a;
+      if (formattedChoice === 'H2 (+1)' || formattedChoice === 'H2(+1)') return h < (a + 1);
+      
+      if (formattedChoice === '0-1 GOAL' || formattedChoice === '0-1 GOALS') return (h + a) <= 1;
+      if (formattedChoice === '2-3 GOALS') return (h + a) >= 2 && (h + a) <= 3;
+      if (formattedChoice === '4+ GOALS') return (h + a) >= 4;
       
       return false;
     };
@@ -1579,7 +1673,7 @@ export default function App() {
                           <div className="flex gap-2 overflow-x-auto scrollbar-none pb-1 pt-1 px-1">
                             {currentVirtualTimes.map((item, index) => {
                               const isSelected = selectedHourIndex === index;
-                              const isLive = index === 4;
+                              const isLive = index === 5;
                               return (
                                 <button
                                   key={index}
@@ -1587,18 +1681,18 @@ export default function App() {
                                   onClick={() => setSelectedHourIndex(index)}
                                   className={`px-3.5 py-1.5 rounded-xl text-xs font-black whitespace-nowrap transition-all border flex flex-col items-center justify-center gap-0.5 min-w-[70px] ${
                                     isSelected
-                                      ? 'bg-red-500 border-red-500 text-white font-extrabold shadow-md'
+                                      ? 'bg-[#004D2C] border-[#004D2C] text-white font-extrabold shadow-md'
                                       : isLive
-                                      ? 'bg-red-500/10 border-red-500/30 text-red-500 hover:bg-red-500/20'
+                                      ? 'bg-red-500/10 border-red-500/30 text-red-500 hover:bg-red-500/20 shadow-sm'
                                       : 'bg-white border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-50'
                                   }`}
                                 >
                                   <span className="font-mono">{item.time}</span>
                                   {isLive ? (
-                                    <span className="text-[7px] uppercase font-black tracking-wide leading-none select-none">
+                                    <span className="text-[7px] uppercase font-black tracking-wide leading-none select-none text-red-600">
                                       🔴 LIVE
                                     </span>
-                                  ) : index < 4 ? (
+                                  ) : index < 5 ? (
                                     <span className="text-[7px] text-gray-400 uppercase font-black tracking-wide leading-none select-none">
                                       Terminé
                                     </span>
@@ -1622,6 +1716,7 @@ export default function App() {
                                 key={filter}
                                 id={`btn-bet-filter-${filter}`}
                                 onClick={() => {
+                                  setLastManualFilterClick(Date.now());
                                   if (filter === '+ 29 DE PLUS v') {
                                     setActiveBetFilter('plus');
                                     alert("Plus de 29 marchés de paris supplémentaires débloqués en exclusivité !");
@@ -1653,7 +1748,7 @@ export default function App() {
                         return activeLeagues.map((league) => {
                           // Get the hour index for this league
                           const hourIndex = selectedLeagueId === 'all'
-                            ? (leagueHourIndices[league.id] !== undefined ? leagueHourIndices[league.id] : 8) // Default to index 8 (13:04 red highlighted active button in screenshot)
+                            ? (leagueHourIndices[league.id] !== undefined ? leagueHourIndices[league.id] : 5) // Default to index 5 (the LIVE session)
                             : selectedHourIndex;
 
                           const selectedTimeItem = currentVirtualTimes[hourIndex];
@@ -1662,14 +1757,14 @@ export default function App() {
                           let simulatedStatus: 'Pending' | 'LIVE' | 'FT' = 'Pending';
                           let liveMinuteVal: number | string | undefined = undefined;
 
-                          if (hourIndex < 4) {
+                          if (hourIndex < 5) {
                             simulatedStatus = 'FT';
                             liveMinuteVal = 90;
-                          } else if (hourIndex > 4) {
+                          } else if (hourIndex > 5) {
                             simulatedStatus = 'Pending';
                             liveMinuteVal = undefined;
                           } else {
-                            // hourIndex === 4 (the current round)
+                            // hourIndex === 5 (the current round)
                             if (cycleSeconds < 120) {
                               simulatedStatus = 'Pending';
                               liveMinuteVal = undefined;
@@ -1787,6 +1882,7 @@ export default function App() {
                                       <button
                                         key={filter}
                                         onClick={() => {
+                                          setLastManualFilterClick(Date.now());
                                           if (filter === '+ 29 DE PLUS v') {
                                             alert("Plus de 29 marchés de paris supplémentaires débloqués en exclusivité !");
                                           } else {
