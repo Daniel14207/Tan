@@ -80,6 +80,7 @@ async function getOcrText(file: { name: string; mimeType: string; base64?: strin
     },
     body: JSON.stringify({
       model: "google/gemini-2.5-flash",
+      max_tokens: 2500,
       messages: [
         {
           role: "user",
@@ -147,7 +148,8 @@ async function queryOpenRouterWithFallback(messages: any[], jsonMode: boolean = 
       const payload: any = {
         model,
         messages,
-        temperature: 0.2
+        temperature: 0.2,
+        max_tokens: 3000
       };
 
       if (jsonMode) {
