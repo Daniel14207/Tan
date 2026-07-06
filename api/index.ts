@@ -33,6 +33,67 @@ function getGenAI(): GoogleGenAI {
   return genAI;
 }
 
+// Mutable lists of active models for fallback and recovery
+let activeOcrModels = [
+  "google/gemini-2.5-flash",
+  "meta-llama/llama-3.2-11b-vision-instruct",
+  "google/gemini-2.5-pro"
+];
+
+let activeTextModels = [
+  "deepseek/deepseek-chat",
+  "qwen/qwen-2.5-72b-instruct",
+  "google/gemini-2.5-flash"
+];
+
+let lastModelCheckTime = 0;
+const CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes to throttle verification requests
+
+async function verifyModelsWithOpenRouter() {
+  const now = Date.now();
+  if (now - lastModelCheckTime < CHECK_INTERVAL_MS) {
+    return; // Use locally cached lists
+  }
+
+  const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+  if (!openrouterApiKey) return;
+
+  try {
+    console.log("[OpenRouter] Pre-verifying model availability with OpenRouter API...");
+    const response = await fetch("https://openrouter.ai/api/v1/models");
+    if (response.ok) {
+      const json = await response.json();
+      if (json && Array.isArray(json.data)) {
+        const availableIds = new Set(json.data.map((m: any) => m.id));
+
+        // Filter active OCR models if at least one remains valid
+        const originalOcr = [...activeOcrModels];
+        const filteredOcr = activeOcrModels.filter(m => availableIds.has(m));
+        if (filteredOcr.length > 0) {
+          activeOcrModels = filteredOcr;
+        }
+        if (activeOcrModels.length !== originalOcr.length) {
+          console.warn(`[OpenRouter] Pre-validation removed unavailable OCR models. Remaining:`, activeOcrModels);
+        }
+
+        // Filter active text models if at least one remains valid
+        const originalText = [...activeTextModels];
+        const filteredText = activeTextModels.filter(m => availableIds.has(m));
+        if (filteredText.length > 0) {
+          activeTextModels = filteredText;
+        }
+        if (activeTextModels.length !== originalText.length) {
+          console.warn(`[OpenRouter] Pre-validation removed unavailable text models. Remaining:`, activeTextModels);
+        }
+
+        lastModelCheckTime = now;
+      }
+    }
+  } catch (err) {
+    console.warn("[OpenRouter] Failed to pre-verify models list, relying on runtime 404 detection:", err);
+  }
+}
+
 // Helper to perform OCR/Extraction from images and PDF files
 async function getOcrText(file: { name: string; mimeType: string; base64?: string; isText: boolean; textContent?: string }): Promise<string> {
   if (file.isText) {
@@ -95,15 +156,19 @@ async function getOcrText(file: { name: string; mimeType: string; base64?: strin
     throw new Error("Clé API manquante : Veuillez configurer GEMINI_API_KEY ou OPENROUTER_API_KEY dans vos variables d'environnement.");
   }
 
-  const ocrModelQueue = [
-    "google/gemini-2.5-flash",
-    "meta-llama/llama-3.2-11b-vision-instruct",
-    "meta-llama/llama-3.2-90b-vision-instruct"
-  ];
+  // Check which models are available on OpenRouter before making the call
+  await verifyModelsWithOpenRouter();
 
+  const ocrModelQueue = [...activeOcrModels];
   let lastOcrError: any = null;
 
   for (const model of ocrModelQueue) {
+    // Skip if dynamically removed during this request or prior requests
+    if (!activeOcrModels.includes(model)) {
+      console.log(`[OCR OpenRouter] Skipping model ${model} (marked as unavailable/404).`);
+      continue;
+    }
+
     try {
       console.log(`[OCR OpenRouter] Executing with model: ${model} for: ${file.name}`);
       const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -137,7 +202,15 @@ async function getOcrText(file: { name: string; mimeType: string; base64?: strin
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Model ${model} failed with status ${response.status}: ${errorText}`);
+        const status = response.status;
+        
+        // Handle 404 or missing endpoints by removing them immediately from the queue
+        if (status === 404 || errorText.includes("not found") || errorText.includes("No endpoint found") || errorText.includes("404")) {
+          console.warn(`[OCR OpenRouter] Model ${model} returned 404 or endpoint not found. Permanently removing from activeOcrModels.`);
+          activeOcrModels = activeOcrModels.filter(m => m !== model);
+        }
+
+        throw new Error(`Model ${model} failed with status ${status}: ${errorText}`);
       }
 
       const result = await response.json();
@@ -149,6 +222,11 @@ async function getOcrText(file: { name: string; mimeType: string; base64?: strin
       console.log(`[OCR OpenRouter] OCR success with model ${model} for: ${file.name}`);
       return ocrText;
     } catch (err: any) {
+      const errMsg = err.message || "";
+      if (errMsg.includes("404") || errMsg.includes("not found") || errMsg.includes("No endpoint found")) {
+        console.warn(`[OCR OpenRouter Exception] Model ${model} triggered 404. Permanently removing from activeOcrModels.`);
+        activeOcrModels = activeOcrModels.filter(m => m !== model);
+      }
       console.error(`[OCR OpenRouter Error] Model ${model} failed for ${file.name}:`, err.stack || err.message || err);
       lastOcrError = err;
     }
@@ -218,17 +296,18 @@ async function queryIAWithFallback(messages: any[], jsonMode: boolean = false): 
 
   // 2. Fallback to OpenRouter if configured
   if (openrouterApiKey) {
-    const modelQueue = [
-      "deepseek/deepseek-chat-v3",
-      "deepseek/deepseek-chat",
-      "qwen/qwen3-235b-a22b",
-      "qwen/qwen-2.5-72b-instruct",
-      "google/gemini-2.5-flash"
-    ];
+    // Check which models are available on OpenRouter before making the call
+    await verifyModelsWithOpenRouter();
 
+    const modelQueue = [...activeTextModels];
     let lastError: any = null;
 
     for (const model of modelQueue) {
+      if (!activeTextModels.includes(model)) {
+        console.log(`[IA Query - OpenRouter] Skipping model ${model} (marked as unavailable/404).`);
+        continue;
+      }
+
       try {
         console.log(`[IA Query - OpenRouter] Sending request to model: ${model}`);
         
@@ -262,7 +341,14 @@ async function queryIAWithFallback(messages: any[], jsonMode: boolean = false): 
 
         if (!res.ok) {
           const errorText = await res.text();
-          throw new Error(`Status ${res.status}: ${errorText}`);
+          const status = res.status;
+
+          if (status === 404 || errorText.includes("not found") || errorText.includes("No endpoint found") || errorText.includes("404")) {
+            console.warn(`[IA Query - OpenRouter] Model ${model} returned 404 or endpoint not found. Permanently removing from activeTextModels.`);
+            activeTextModels = activeTextModels.filter(m => m !== model);
+          }
+
+          throw new Error(`Status ${status}: ${errorText}`);
         }
 
         const data = await res.json();
@@ -274,6 +360,11 @@ async function queryIAWithFallback(messages: any[], jsonMode: boolean = false): 
         console.log(`[IA Query - OpenRouter] Successfully got response from: ${model}`);
         return content;
       } catch (err: any) {
+        const errMsg = err.message || "";
+        if (errMsg.includes("404") || errMsg.includes("not found") || errMsg.includes("No endpoint found")) {
+          console.warn(`[IA Query - OpenRouter Exception] Model ${model} triggered 404. Permanently removing from activeTextModels.`);
+          activeTextModels = activeTextModels.filter(m => m !== model);
+        }
         console.error(`[IA Query - OpenRouter Error] Model ${model} failed:`, err.stack || err.message || err);
         lastError = err;
       }
