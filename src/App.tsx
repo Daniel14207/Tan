@@ -966,7 +966,10 @@ export default function App() {
 
     // HT correct score helper
     const htScore = `${m.halfTimeScoreHome}-${m.halfTimeScoreAway}`;
-    const htAltScore = hSc > aSc ? `1-0` : `0-1`;
+    let htAltScore = hSc > aSc ? `1-0` : `0-1`;
+    if (htAltScore === htScore) {
+      htAltScore = htScore === '0-0' ? '1-0' : '0-0';
+    }
 
     if (norm === '1X2' || norm === 'FINAL 1X2' || norm === 'ALL FINAL') {
       return [
