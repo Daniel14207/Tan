@@ -7,6 +7,10 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
+import dotenv from "dotenv";
+
+// Load environment variables
+dotenv.config();
 
 // Lazy initialize Gemini client to prevent crash if key is missing on start
 let genAI: GoogleGenAI | null = null;
@@ -15,8 +19,10 @@ function getGenAI(): GoogleGenAI {
   if (!genAI) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      throw new Error("GEMINI_API_KEY environment variable is not configured in Settings > Secrets.");
+      console.error("[Gemini Client Error] GEMINI_API_KEY environment variable is not configured in Settings > Secrets.");
+      throw new Error("GEMINI_API_KEY is not configured in environment variables.");
     }
+    console.log("[Gemini Client] Initializing GoogleGenAI client with AI Studio user-agent...");
     genAI = new GoogleGenAI({
       apiKey,
       httpOptions: {
@@ -36,156 +42,249 @@ async function getOcrText(file: { name: string; mimeType: string; base64?: strin
   }
 
   if (!file.base64) {
+    console.error(`[OCR Error] Base64 content is empty for file: ${file.name}`);
     return "";
   }
+
+  // Clean base64 input (remove any data URL prefixes)
+  let base64Data = file.base64;
+  if (base64Data.includes(",")) {
+    base64Data = base64Data.split(",")[1];
+  }
+
+  const mimeType = file.mimeType || "image/jpeg";
+  console.log(`[OCR Start] File: ${file.name}, MIME Type: ${mimeType}, Size: ${base64Data.length} chars`);
 
   // Attempt using Native Google Gemini API first if configured
   if (process.env.GEMINI_API_KEY) {
     try {
-      console.log(`[OCR] Executing native Gemini OCR for: ${file.name}`);
+      console.log(`[OCR] Executing native Gemini OCR for: ${file.name} (using gemini-3.5-flash)`);
       const ai = getGenAI();
       const response = await ai.models.generateContent({
         model: "gemini-3.5-flash",
-        contents: [
-          {
-            inlineData: {
-              mimeType: file.mimeType,
-              data: file.base64
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: mimeType,
+                data: base64Data
+              }
+            },
+            {
+              text: "Extract all matches, schedules, scores, odds, teams, stats, tables, and text content from this document/image exhaustively. Be precise."
             }
-          },
-          "Extract all matches, schedules, scores, odds, teams, stats, tables, and text content from this document/image exhaustively. Be precise."
-        ]
+          ]
+        }
       });
       if (response.text) {
         console.log(`[OCR] Native Gemini OCR success for: ${file.name}`);
         return response.text;
+      } else {
+        throw new Error("La réponse de l'OCR natif Gemini est vide.");
       }
     } catch (err: any) {
-      console.warn(`[OCR] Native Gemini OCR failed, falling back to OpenRouter:`, err.message || err);
+      console.error(`[OCR Error] Native Gemini OCR failed for ${file.name}. Details:`, err.stack || err.message || err);
+      console.warn("[OCR] Falling back to OpenRouter vision models...");
     }
+  } else {
+    console.warn("[OCR] GEMINI_API_KEY is not configured. Skipping native Gemini OCR, attempting OpenRouter...");
   }
 
-  // Otherwise fallback to OpenRouter (using a vision-capable model: google/gemini-2.5-flash)
+  // Otherwise fallback to OpenRouter (using a vision-capable model queue)
   const openrouterApiKey = process.env.OPENROUTER_API_KEY;
   if (!openrouterApiKey) {
-    throw new Error("Pour analyser des images/PDF, veuillez configurer OPENROUTER_API_KEY ou GEMINI_API_KEY.");
+    console.error("[OCR Error] Neither GEMINI_API_KEY nor OPENROUTER_API_KEY are configured in environment variables.");
+    throw new Error("Clé API manquante : Veuillez configurer GEMINI_API_KEY ou OPENROUTER_API_KEY dans vos variables d'environnement.");
   }
 
-  console.log(`[OCR] Executing OpenRouter google/gemini-2.5-flash OCR for: ${file.name}`);
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${openrouterApiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: "google/gemini-2.5-flash",
-      max_tokens: 2500,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Extract all matches, schedules, scores, odds, teams, stats, tables, and text content from this document/image exhaustively. Be precise."
-            },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:${file.mimeType};base64,${file.base64}`
-              }
-            }
-          ]
-        }
-      ]
-    })
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`OpenRouter OCR failed (${response.status}): ${errorText}`);
-  }
-
-  const result = await response.json();
-  const ocrText = result.choices?.[0]?.message?.content;
-  if (!ocrText) {
-    throw new Error("L'OCR via OpenRouter n'a renvoyé aucun texte.");
-  }
-
-  console.log(`[OCR] OpenRouter OCR success for: ${file.name}`);
-  return ocrText;
-}
-
-// Standard OpenRouter query helper with Fallback models
-async function queryOpenRouterWithFallback(messages: any[], jsonMode: boolean = false): Promise<string> {
-  const openrouterApiKey = process.env.OPENROUTER_API_KEY;
-  if (!openrouterApiKey) {
-    throw new Error("Le paramètre OPENROUTER_API_KEY n'est pas configuré dans les variables d'environnement (Settings > Secrets).");
-  }
-
-  const modelQueue = [
-    "deepseek/deepseek-chat-v3",
-    "deepseek/deepseek-chat",
-    "qwen/qwen3-235b-a22b",
-    "qwen/qwen-2.5-72b-instruct",
-    "google/gemini-2.5-flash"
+  const ocrModelQueue = [
+    "google/gemini-2.5-flash",
+    "meta-llama/llama-3.2-11b-vision-instruct",
+    "meta-llama/llama-3.2-90b-vision-instruct"
   ];
 
-  let lastError: any = null;
+  let lastOcrError: any = null;
 
-  for (const model of modelQueue) {
+  for (const model of ocrModelQueue) {
     try {
-      console.log(`[OpenRouter] Sending request to model: ${model}`);
-      
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s timeout
-
-      const headers: any = {
-        "Authorization": `Bearer ${openrouterApiKey}`,
-        "Content-Type": "application/json"
-      };
-
-      const payload: any = {
-        model,
-        messages,
-        temperature: 0.2,
-        max_tokens: 3000
-      };
-
-      if (jsonMode) {
-        payload.response_format = { type: "json_object" };
-      }
-
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      console.log(`[OCR OpenRouter] Executing with model: ${model} for: ${file.name}`);
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-        signal: controller.signal
+        headers: {
+          "Authorization": `Bearer ${openrouterApiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 2500,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "Extract all matches, schedules, scores, odds, teams, stats, tables, and text content from this document/image exhaustively. Be precise."
+                },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${mimeType};base64,${base64Data}`
+                  }
+                }
+              ]
+            }
+          ]
+        })
       });
 
-      clearTimeout(timeoutId);
-
-      if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(`Status ${res.status}: ${errorText}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Model ${model} failed with status ${response.status}: ${errorText}`);
       }
 
-      const data = await res.json();
-      const content = data.choices?.[0]?.message?.content;
-      if (!content) {
-        throw new Error("Le modèle a retourné une réponse vide.");
+      const result = await response.json();
+      const ocrText = result.choices?.[0]?.message?.content;
+      if (!ocrText) {
+        throw new Error(`Model ${model} returned empty content.`);
       }
 
-      console.log(`[OpenRouter] Successfully got response from: ${model}`);
-      return content;
+      console.log(`[OCR OpenRouter] OCR success with model ${model} for: ${file.name}`);
+      return ocrText;
     } catch (err: any) {
-      console.warn(`[OpenRouter] Model ${model} failed:`, err.message || err);
-      lastError = err;
-      // Continue to next model
+      console.error(`[OCR OpenRouter Error] Model ${model} failed for ${file.name}:`, err.stack || err.message || err);
+      lastOcrError = err;
     }
   }
 
-  throw new Error(`Tous les modèles d'analyse OpenRouter ont échoué. Dernière erreur: ${lastError?.message || lastError}`);
+  throw new Error(`Tous les modèles d'analyse d'image ont échoué. Dernière erreur: ${lastOcrError?.message || lastOcrError}`);
+}
+
+// Universal AI query helper with Gemini and OpenRouter Fallbacks
+async function queryIAWithFallback(messages: any[], jsonMode: boolean = false): Promise<string> {
+  const geminiApiKey = process.env.GEMINI_API_KEY;
+  const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+
+  if (!geminiApiKey && !openrouterApiKey) {
+    console.error("[IA Query Error] No API key configured (neither GEMINI_API_KEY nor OPENROUTER_API_KEY).");
+    throw new Error("Clé API manquante : Veuillez configurer GEMINI_API_KEY ou OPENROUTER_API_KEY dans vos variables d'environnement.");
+  }
+
+  // 1. Try Google Gemini Native first if configured (extremely fast, stable and free)
+  if (geminiApiKey) {
+    try {
+      console.log(`[IA Query] Attempting native Gemini API (gemini-3.5-flash)...`);
+      const ai = getGenAI();
+      
+      let contents: any[] = [];
+      let systemInstruction = "";
+
+      for (const msg of messages) {
+        if (msg.role === "system") {
+          systemInstruction += msg.content + "\n";
+        } else {
+          contents.push({
+            role: msg.role === "assistant" ? "model" : "user",
+            parts: [{ text: msg.content }]
+          });
+        }
+      }
+
+      if (contents.length === 0) {
+        contents = [{ role: "user", parts: [{ text: "Analyse" }] }];
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents,
+        config: {
+          systemInstruction: systemInstruction || undefined,
+          responseMimeType: jsonMode ? "application/json" : "text/plain",
+          temperature: 0.2
+        }
+      });
+
+      if (response.text) {
+        console.log(`[IA Query] Native Gemini API success!`);
+        return response.text;
+      } else {
+        throw new Error("Native Gemini API returned empty content.");
+      }
+    } catch (err: any) {
+      console.error(`[IA Query Error] Native Gemini API failed. Error:`, err.stack || err.message || err);
+      if (!openrouterApiKey) {
+        throw new Error(`L'analyse native Gemini a échoué et aucune clé OpenRouter n'est configurée. Détails : ${err.message || err}`);
+      }
+      console.warn("[IA Query] Falling back to OpenRouter text models...");
+    }
+  }
+
+  // 2. Fallback to OpenRouter if configured
+  if (openrouterApiKey) {
+    const modelQueue = [
+      "deepseek/deepseek-chat-v3",
+      "deepseek/deepseek-chat",
+      "qwen/qwen3-235b-a22b",
+      "qwen/qwen-2.5-72b-instruct",
+      "google/gemini-2.5-flash"
+    ];
+
+    let lastError: any = null;
+
+    for (const model of modelQueue) {
+      try {
+        console.log(`[IA Query - OpenRouter] Sending request to model: ${model}`);
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s timeout
+
+        const headers: any = {
+          "Authorization": `Bearer ${openrouterApiKey}`,
+          "Content-Type": "application/json"
+        };
+
+        const payload: any = {
+          model,
+          messages,
+          temperature: 0.2,
+          max_tokens: 3000
+        };
+
+        if (jsonMode) {
+          payload.response_format = { type: "json_object" };
+        }
+
+        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(`Status ${res.status}: ${errorText}`);
+        }
+
+        const data = await res.json();
+        const content = data.choices?.[0]?.message?.content;
+        if (!content) {
+          throw new Error("Le modèle a retourné une réponse de contenu vide.");
+        }
+
+        console.log(`[IA Query - OpenRouter] Successfully got response from: ${model}`);
+        return content;
+      } catch (err: any) {
+        console.error(`[IA Query - OpenRouter Error] Model ${model} failed:`, err.stack || err.message || err);
+        lastError = err;
+      }
+    }
+
+    throw new Error(`Tous les modèles d'analyse OpenRouter ont échoué. Dernière erreur: ${lastError?.message || lastError}`);
+  }
+
+  throw new Error("Impossible de traiter l'analyse. Veuillez configurer vos clés API.");
 }
 
 const app = express();
@@ -240,16 +339,20 @@ app.post("/api/analyse-premium/historique", async (req, res) => {
       compiledText = textRepresentations.join("\n\n");
     }
 
-    if (!process.env.OPENROUTER_API_KEY) {
-      return res.status(500).json({ error: "L'API Key OPENROUTER_API_KEY n'est pas configurée dans les variables d'environnement (Settings > Secrets)." });
+    if (!process.env.OPENROUTER_API_KEY && !process.env.GEMINI_API_KEY) {
+      console.error("[Historique API Error] Neither GEMINI_API_KEY nor OPENROUTER_API_KEY are configured.");
+      return res.status(500).json({ error: "Clé API manquante : Veuillez configurer GEMINI_API_KEY ou OPENROUTER_API_KEY dans vos variables d'environnement." });
     }
 
-    // 2. IA analysis with OpenRouter
+    // 2. IA analysis with universal query helper
     const messages = [
       {
+        role: "system",
+        content: "Tu es un moteur d'analyse statistique sportive de haut niveau (Analyse Premium)."
+      },
+      {
         role: "user",
-        content: `Tu es un moteur d'analyse statistique sportive de haut niveau (Analyse Premium).
-Analyse les données d'historique extraites ci-dessous :
+        content: `Analyse les données d'historique extraites ci-dessous :
 
 ${compiledText}
 
@@ -281,7 +384,7 @@ Le JSON retourné doit correspondre STRICTEMENT au schéma suivant, sans bloc de
       }
     ];
 
-    const text = await queryOpenRouterWithFallback(messages, true);
+    const text = await queryIAWithFallback(messages, true);
     
     // Clean possible Markdown wrappers
     let cleanText = text.trim();
@@ -323,20 +426,24 @@ app.post("/api/analyse-premium/analyse", async (req, res) => {
       compiledText = textRepresentations.join("\n\n");
     }
 
-    if (!process.env.OPENROUTER_API_KEY) {
-      return res.status(500).json({ error: "L'API Key OPENROUTER_API_KEY n'est pas configurée dans les variables d'environnement (Settings > Secrets)." });
+    if (!process.env.OPENROUTER_API_KEY && !process.env.GEMINI_API_KEY) {
+      console.error("[Analyse API Error] Neither GEMINI_API_KEY nor OPENROUTER_API_KEY are configured.");
+      return res.status(500).json({ error: "Clé API manquante : Veuillez configurer GEMINI_API_KEY ou OPENROUTER_API_KEY dans vos variables d'environnement." });
     }
 
     const historyContextStr = baseStatistique 
       ? JSON.stringify(baseStatistique) 
       : "Aucun historique mémorisé pour cette session.";
 
-    // 2. IA predictions with OpenRouter
+    // 2. IA predictions with universal query helper
     const messages = [
       {
+        role: "system",
+        content: "Tu es un moteur d'analyse de prédiction sportive (Analyse Premium)."
+      },
+      {
         role: "user",
-        content: `Tu es un moteur d'analyse de prédiction sportive (Analyse Premium).
-Tu as mémorisé la base de statistiques historiques suivante pour cette session :
+        content: `Tu as mémorisé la base de statistiques historiques suivante pour cette session :
 ${historyContextStr}
 
 Analyse maintenant les documents de match ci-dessous :
@@ -365,7 +472,7 @@ RÈGLES ABSOLUES :
       }
     ];
 
-    const text = await queryOpenRouterWithFallback(messages, false);
+    const text = await queryIAWithFallback(messages, false);
 
     // Clean lines to keep only match lines
     const lines = text.split("\n")

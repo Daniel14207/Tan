@@ -181,7 +181,7 @@ export default function AnalysePremium({ onBack }: AnalysePremiumProps) {
             id: fileId,
             name: file.name,
             size: file.size,
-            type: file.type || "image/jpeg",
+            type: compressed.mimeType,
             base64: compressed.base64,
             isText: false
           });
@@ -271,7 +271,8 @@ export default function AnalysePremium({ onBack }: AnalysePremiumProps) {
           });
           if (!ocrRes.ok) {
             const errJson = await ocrRes.json().catch(() => ({}));
-            throw new Error(errJson.error || `Erreur lors de l'extraction de l'image "${file.name}"`);
+            const reason = errJson.error ? `: ${errJson.error}` : ` (Status: ${ocrRes.status})`;
+            throw new Error(`Erreur lors de l'extraction de l'image "${file.name}"${reason}`);
           }
           const ocrData = await ocrRes.json();
           textRepresentations.push(`--- CONTENU DU FICHIER: ${file.name} ---\n${ocrData.text}`);
@@ -359,7 +360,8 @@ export default function AnalysePremium({ onBack }: AnalysePremiumProps) {
           });
           if (!ocrRes.ok) {
             const errJson = await ocrRes.json().catch(() => ({}));
-            throw new Error(errJson.error || `Erreur lors de l'extraction de l'image "${file.name}"`);
+            const reason = errJson.error ? `: ${errJson.error}` : ` (Status: ${ocrRes.status})`;
+            throw new Error(`Erreur lors de l'extraction de l'image "${file.name}"${reason}`);
           }
           const ocrData = await ocrRes.json();
           textRepresentations.push(`--- CONTENU DU DOCUMENT DE MATCH: ${file.name} ---\n${ocrData.text}`);
